@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Health Vault — Connecting to Epic</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f6f8; color: #1a1a2e; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .card { background: white; border-radius: 16px; padding: 40px; max-width: 440px; width: 90%; box-shadow: 0 4px 24px rgba(0,0,0,0.08); text-align: center; }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+  .subtitle { font-size: 14px; color: #888; margin-bottom: 24px; }
+  .spinner { width: 32px; height: 32px; border: 3px solid #e5e7eb; border-top-color: #3498db; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status { font-size: 14px; color: #555; margin-bottom: 8px; }
+  .error { color: #e74c3c; font-size: 13px; margin-top: 12px; background: #fef2f2; padding: 12px; border-radius: 8px; text-align: left; word-break: break-word; }
+  .success { color: #27ae60; font-size: 14px; font-weight: 600; }
+  .back-link { display: inline-block; margin-top: 16px; font-size: 13px; color: #3498db; text-decoration: none; }
+  .back-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="spinner" id="spinner"></div>
+  <h1>Connecting to Epic</h1>
+  <div class="subtitle">Exchanging authorization...</div>
+  <div class="status" id="status">Processing...</div>
+</div>
+<script>
+(async function() {
+  const card = document.getElementById('card');
+  const status = document.getElementById('status');
+  const spinner = document.getElementById('spinner');
+
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  const error = params.get('error');
+  const errorDesc = params.get('error_description');
+
+  if (error) {
+    spinner.style.display = 'none';
+    status.innerHTML = '';
+    card.querySelector('h1').textContent = 'Authorization Denied';
+    card.querySelector('.subtitle').textContent = '';
+    card.innerHTML += `<div class="error"><strong>Error:</strong> ${error}<br>${errorDesc || ''}</div>`;
+    card.innerHTML += '<a class="back-link" href="/">Back to Health Vault</a>';
+    return;
+  }
+
+  if (!code) {
+    spinner.style.display = 'none';
+    status.innerHTML = '';
+    card.querySelector('h1').textContent = 'No Authorization Code';
+    card.querySelector('.subtitle').textContent = 'Epic did not return an authorization code.';
+    card.innerHTML += '<a class="back-link" href="/">Back to Health Vault</a>';
+    return;
+  }
+
+  // Exchange code for token via our API
+  try {
+    status.textContent = 'Exchanging code for access token...';
+    const resp = await fetch(`/api/epic/callback?code=${encodeURIComponent(code)}`);
+    const data = await resp.json();
+
+    if (!resp.ok || data.error) {
+      throw new Error(data.error || data.detail || `HTTP ${resp.status}`);
+    }
+
+    spinner.style.display = 'none';
+    card.querySelector('h1').textContent = 'Connected!';
+    card.querySelector('.subtitle').textContent = '';
+    status.innerHTML = `<div class="success">Successfully connected to Epic FHIR</div>`;
+    if (data.patient_id) {
+      status.innerHTML += `<div style="font-size:12px;color:#888;margin-top:4px">Patient ID: ${data.patient_id}</div>`;
+    }
+    card.innerHTML += '<a class="back-link" href="/">Back to Health Vault</a>';
+
+    // Auto-redirect after a few seconds
+    setTimeout(() => { window.location.href = '/'; }, 3000);
+
+  } catch (e) {
+    spinner.style.display = 'none';
+    card.querySelector('h1').textContent = 'Connection Failed';
+    card.querySelector('.subtitle').textContent = '';
+    status.innerHTML = '';
+    card.innerHTML += `<div class="error"><strong>Error:</strong> ${e.message}</div>`;
+    card.innerHTML += '<a class="back-link" href="/">Back to Health Vault</a>';
+  }
+})();
+</script>
+</body>
+</html>

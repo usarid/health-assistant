@@ -1,0 +1,43 @@
+# ── Patient data (large, personal, never commit) ──
+data/
+archive/
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# ── Claude context ──
+.claude/
+
+# ── macOS ──
+.DS_Store
+
+# ── Docker volumes (managed by Docker, not git) ──
+phv-pgdata/
+phv-osdata/
+phv-aidata/
+
+# ── SSL certs (self-signed, local only) ──
+certs/
+
+# ── Environment & secrets ──
+.env
+*.env
+.env.*
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs ──
+*.log
+
+# ── Temporary ──
+*.tmp
+*.bak

@@ -1,0 +1,3 @@
+# FHIR R4 Server Requirements
+# Python 3.10+ standard library only - no external dependencies required
+# The server uses only built-in modules: http.server, sqlite3, json, urllib, etc.

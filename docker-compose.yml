@@ -1,0 +1,146 @@
+###############################################################################
+# Personal Health Vault - Docker Compose
+# HAPI FHIR R4 Server + PostgreSQL + OpenSearch (full-text search)
+#
+# Usage:
+#   docker compose up -d        # Start all services
+#   docker compose down          # Stop all services
+#   docker compose logs -f hapi  # View HAPI logs
+#
+# Data persists in Docker volumes between restarts.
+# To completely reset: docker compose down -v
+###############################################################################
+
+services:
+  # ─── PostgreSQL 16 ────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: phv-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: hapi
+      POSTGRES_USER: hapi
+      POSTGRES_PASSWORD: hapi_phv_2026
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hapi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── OpenSearch 2 (full-text search engine) ───────────────────────────
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    container_name: phv-opensearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - bootstrap.memory_lock=true
+      # Disable the vm.max_map_count check (avoids kernel setting issues on Mac)
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=ignored
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # ─── HAPI FHIR R4 Server ─────────────────────────────────────────────
+  hapi:
+    build:
+      context: .
+      dockerfile: hapi-config/Dockerfile
+    container_name: phv-hapi-fhir
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms1g -Xmx4g"
+      SPRING_CONFIG_LOCATION: "file:///app/config/application.yaml"
+    volumes:
+      - ./hapi-config/application.yaml:/app/config/application.yaml:ro
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "java", "/app/healthcheck.java"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 120s
+
+  # ─── API Layer (FastAPI) ───────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: phv-api
+    restart: unless-stopped
+    depends_on:
+      hapi:
+        condition: service_healthy
+    environment:
+      HAPI_BASE: "http://hapi:8080/fhir"
+      PHV_LIB: "/app"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}"
+      ASSISTANT_DB: "/data/chat.db"
+      OLLAMA_BASE: "http://host.docker.internal:11434"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-mistral}"
+      EPIC_CLIENT_ID: "${EPIC_CLIENT_ID:-}"
+      EPIC_CLIENT_SECRET: "${EPIC_CLIENT_SECRET:-}"
+      EPIC_REDIRECT_URI: "${EPIC_REDIRECT_URI:-https://localhost:3000/callback}"
+    volumes:
+      - aidata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8000/api/health'); exit(0 if r.status_code==200 else 1)\""]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  # ─── Web UI (nginx) ───────────────────────────────────────────────────
+  web:
+    image: nginx:alpine
+    container_name: phv-web
+    restart: unless-stopped
+    depends_on:
+      hapi:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:443"
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+
+volumes:
+  pgdata:
+    name: phv-pgdata
+    external: true
+  osdata:
+    name: phv-osdata
+    external: true
+  aidata:
+    name: phv-aidata
