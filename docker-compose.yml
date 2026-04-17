@@ -132,7 +132,6 @@ services:
       - "3000:443"
     volumes:
       - ./web:/usr/share/nginx/html:ro
-      - ./logo:/usr/share/nginx/html/logo:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
 
