@@ -253,6 +253,53 @@ async def execute_proposed_action(action: dict) -> dict:
             result = await _fhir_post("DocumentReference", resource)
             return {"ok": True, "resource_type": "DocumentReference", "id": result.get("id", ""), "action_type": action_type}
 
+        elif action_type == "create_reminder":
+            # Create a reminder via the reminders API (same DB)
+            import aiosqlite, json as _json
+            reminder_db_path = os.environ.get("ASSISTANT_DB", "/data/chat.db")
+            db = await aiosqlite.connect(reminder_db_path)
+            db.row_factory = aiosqlite.Row
+            await db.executescript("""
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message TEXT NOT NULL,
+                    context TEXT DEFAULT '',
+                    due_at TEXT NOT NULL,
+                    status TEXT DEFAULT 'active',
+                    priority TEXT DEFAULT 'normal',
+                    linked_med TEXT DEFAULT '',
+                    linked_condition TEXT DEFAULT '',
+                    linked_resource_id TEXT DEFAULT '',
+                    actions TEXT DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT DEFAULT '',
+                    source TEXT DEFAULT 'assistant'
+                );
+            """)
+            actions_json = _json.dumps(params.get("actions", []))
+            cursor = await db.execute(
+                """INSERT INTO reminders (message, context, due_at, priority,
+                       linked_med, linked_condition, linked_resource_id, actions,
+                       created_at, updated_at, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'assistant')""",
+                (
+                    params.get("message", ""),
+                    params.get("context", ""),
+                    params.get("due_at", ""),
+                    params.get("priority", "normal"),
+                    params.get("linked_med", ""),
+                    params.get("linked_condition", ""),
+                    params.get("linked_resource_id", ""),
+                    actions_json,
+                    now, now,
+                ),
+            )
+            await db.commit()
+            rid = cursor.lastrowid
+            await db.close()
+            return {"ok": True, "reminder_id": rid, "action_type": action_type}
+
         else:
             return {"error": f"Unknown action type: {action_type}"}
 
@@ -413,7 +460,12 @@ def build_system_prompt(patient_context: str, prefs: dict = None) -> str:
     assistant_name = prefs.get("assistant_name", "Assistant")
     name_intro = f'Your name is "{assistant_name}". ' if assistant_name and assistant_name != "Assistant" else ""
 
+    today_str = datetime.now(timezone.utc).strftime("%A, %B %d, %Y")
+
     return f"""{name_intro}You are a knowledgeable, thoughtful health assistant for a Personal Health Vault. You have access to the patient's medical data summary below. Your role is to help the patient understand their health data, spot patterns, prepare for doctor appointments, and make informed decisions about their care.
+
+TODAY'S DATE: {today_str}
+Use this when calculating dates for reminders, follow-ups, or any time-sensitive recommendations.
 
 IMPORTANT GUIDELINES:
 - Be specific and cite data when discussing trends or findings (e.g., "Your creatinine was 1.2 mg/dL on March 15, up from 1.0 in January").
@@ -439,8 +491,25 @@ You can propose updates to the patient's health record using the user_propose_up
 - Updating medication status (marking as stopped, started, changed dose)
 - Adding a new medication the patient reports taking
 - Adding patient notes or annotations
+- Creating reminders for follow-up actions
 When you use user_propose_update, the patient will see a confirmation card in the chat showing EXACTLY what will be written to their record. The update only happens after they explicitly approve it. All proposed updates are tagged as patient-entered data in FHIR, so they're always distinguishable from clinician-entered records.
 Use this proactively when the patient tells you something that implies a record update — e.g., "I stopped taking X" or "My blood pressure this morning was 128/82". Propose the update and explain what you're doing. If in doubt, ask the patient if they'd like you to record it.
+
+REMINDERS:
+You can create reminders using user_propose_update with action_type "create_reminder". Use this whenever a conversation implies a follow-up action or check-in is needed. Examples:
+- Patient decides to pause a medication → create a reminder to check how they're doing in 1-2 weeks
+- Patient reports new symptoms → remind to follow up if symptoms persist
+- Discussion about scheduling an appointment → remind to book it
+- Lab results are borderline → remind to recheck in the appropriate timeframe
+Each reminder can include offered actions — structured buttons the patient can click to resolve the reminder. For example, a medication pause reminder might offer: "Rashes improved — keep paused", "Scalp issues returned — restart medication", or "No change — discuss with doctor".
+Be proactive about suggesting reminders. When a conversation naturally implies something the patient should follow up on, propose a reminder with appropriate timing and actions. The reminder params are:
+- message: what to remind about (required)
+- due_at: ISO datetime for when the reminder should fire (required)
+- context: brief context from the conversation
+- priority: low/normal/high
+- linked_med: medication key if relevant
+- linked_condition: condition name if relevant
+- actions: list of {{label, action_type, params}} for resolution buttons
 {style_section}
 
 PATIENT DATA SUMMARY:
@@ -612,7 +681,7 @@ FHIR_TOOLS = [
                 "action_type": {
                     "type": "string",
                     "description": "The type of update to propose.",
-                    "enum": ["add_observation", "update_medication_status", "add_medication", "add_note"],
+                    "enum": ["add_observation", "update_medication_status", "add_medication", "add_note", "create_reminder"],
                 },
                 "summary": {
                     "type": "string",
@@ -626,6 +695,7 @@ FHIR_TOOLS = [
                         "\n- update_medication_status: {med_key, display_name, status ('taking'|'not_taking'|'as_needed'), notes?}"
                         "\n- add_medication: {name, dosage?, date?, note?}"
                         "\n- add_note: {title, text, type?}"
+                        "\n- create_reminder: {message, due_at (ISO datetime), context?, priority?, linked_med?, linked_condition?, actions? (list of {label, action_type, params})}"
                     ),
                 },
             },

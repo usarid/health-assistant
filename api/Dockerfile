@@ -16,6 +16,7 @@ COPY api/analyst.py /app/analyst.py
 COPY api/meds.py /app/meds.py
 COPY api/patient_profile.py /app/patient_profile.py
 COPY api/epic_oauth.py /app/epic_oauth.py
+COPY api/reminders.py /app/reminders.py
 
 ENV PHV_LIB=/app
 ENV HAPI_BASE=http://hapi:8080/fhir

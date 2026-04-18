@@ -40,12 +40,14 @@ from analyst import router as analyst_router
 from meds import router as meds_router
 from patient_profile import router as profile_router
 from epic_oauth import router as epic_router
+from reminders import router as reminders_router
 app.include_router(assistant_router)
 app.include_router(narrator_router)
 app.include_router(analyst_router)
 app.include_router(meds_router)
 app.include_router(profile_router)
 app.include_router(epic_router)
+app.include_router(reminders_router)
 
 app.add_middleware(
     CORSMiddleware,

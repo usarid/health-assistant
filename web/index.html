@@ -323,6 +323,7 @@
   .ast-msg.assistant { align-self: flex-start; background: white; color: #333; border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
   .ast-msg.assistant .ast-model-tag { font-size: 10px; color: #aaa; margin-bottom: 4px; }
   .ast-msg.error { align-self: center; background: #fee; color: #c33; border: 1px solid #fcc; font-size: 13px; }
+  .ast-date-sep { text-align: center; font-size: 11px; color: #aaa; padding: 12px 0 4px; font-weight: 500; }
   .ast-tool-indicator { font-size: 12px; color: #7f8c8d; padding: 6px 0; }
   .ast-tool-header { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
   .ast-tool-header:hover { color: #555; }
@@ -346,7 +347,14 @@
   .ast-proposed-icon { width: 28px; height: 28px; background: #3498db; color: white; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
   .ast-proposed-title { font-size: 12px; font-weight: 700; color: #1a5276; text-transform: uppercase; letter-spacing: 0.5px; }
   .ast-proposed-summary { font-size: 14px; color: #2c3e50; font-weight: 500; margin-bottom: 8px; line-height: 1.4; }
-  .ast-proposed-detail { font-size: 11px; color: #7f8c8d; margin-bottom: 12px; padding: 8px 10px; background: rgba(255,255,255,0.7); border-radius: 6px; font-family: 'SF Mono', Monaco, Consolas, monospace; }
+  .ast-proposed-detail { font-size: 13px; color: #444; margin-bottom: 12px; padding: 12px 14px; background: rgba(255,255,255,0.8); border-radius: 8px; line-height: 1.6; }
+  .ast-proposed-detail .prop-row { margin-bottom: 6px; }
+  .ast-proposed-detail .prop-row:last-child { margin-bottom: 0; }
+  .ast-proposed-detail .prop-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #3498db; display: block; margin-bottom: 1px; }
+  .ast-proposed-detail .prop-value { color: #2c3e50; }
+  .ast-proposed-detail .prop-options { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+  .ast-proposed-detail .prop-option { display: flex; align-items: flex-start; gap: 6px; padding: 6px 10px; background: #eaf2f8; border-radius: 6px; font-size: 12px; color: #2c3e50; line-height: 1.3; }
+  .ast-proposed-detail .prop-option-num { font-weight: 700; color: #3498db; flex-shrink: 0; }
   .ast-proposed-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: #7f8c8d; margin-bottom: 10px; }
   .ast-proposed-tag::before { content: '🏷'; font-size: 10px; }
   .ast-proposed-btns { display: flex; gap: 8px; }
@@ -519,6 +527,108 @@
   .meds-add-custom { margin-top: 10px; font-size: 12px; color: #888; }
   .meds-custom-btn { background: none; border: none; color: #2471a3; cursor: pointer; font-size: 12px; text-decoration: underline; }
   .meds-custom-btn:hover { color: #1a5276; }
+
+  /* ── Home page ── */
+  .home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .home-grid { grid-template-columns: 1fr; } }
+  .home-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  .home-card-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #999; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
+  .home-card.full-width { grid-column: 1 / -1; }
+
+  .home-greeting { font-size: 22px; font-weight: 600; color: #1a1a2e; margin-bottom: 4px; }
+  .home-date { font-size: 14px; color: #888; margin-bottom: 20px; }
+
+  .reminder-list { list-style: none; }
+  .reminder-item { padding: 12px 0; border-bottom: 1px solid #f5f5f5; }
+  .reminder-item:last-child { border-bottom: none; }
+  .reminder-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .reminder-message { font-size: 14px; color: #1a1a2e; font-weight: 500; flex: 1; }
+  .reminder-due-line { font-size: 12px; margin: 4px 0 2px; font-weight: 500; }
+  .reminder-due-line.overdue { color: #e74c3c; }
+  .reminder-due-line.today { color: #f39c12; }
+  .reminder-due-line.upcoming { color: #7f8c8d; }
+  .reminder-future { opacity: 0.55; }
+  .reminder-future .reminder-actions-primary { display: none; }
+  .reminder-future .reminder-actions-secondary { opacity: 0.7; }
+  .reminder-context { font-size: 12px; color: #888; margin-top: 4px; }
+  .reminder-actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .reminder-action-btn { font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid #ddd; background: white; color: #555; cursor: pointer; }
+  .reminder-action-btn:hover { border-color: #aaa; color: #333; }
+  .reminder-action-btn.primary { background: #2471a3; color: white; border-color: #2471a3; }
+  .reminder-action-btn.primary:hover { background: #1a5276; }
+  .reminder-action-btn.dismiss { color: #999; }
+  .reminder-action-btn.snooze { color: #f39c12; border-color: #f39c12; }
+  .reminder-badge { background: #e74c3c; color: white; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; margin-left: 4px; }
+  .reminder-empty { font-size: 13px; color: #bbb; padding: 20px 0; text-align: center; }
+
+  /* Date picker overlay */
+  .datepicker-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.35); z-index: 1000; display: flex; align-items: center; justify-content: center; }
+  .datepicker-card { background: white; border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.18); width: 320px; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+  .datepicker-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; }
+  .datepicker-title { font-size: 15px; font-weight: 600; color: #1a1a2e; }
+  .datepicker-close { background: none; border: none; font-size: 18px; color: #999; cursor: pointer; padding: 2px 6px; border-radius: 6px; }
+  .datepicker-close:hover { background: #f0f0f0; color: #555; }
+  .datepicker-nav { display: flex; align-items: center; justify-content: space-between; padding: 0 16px 8px; }
+  .datepicker-month { font-size: 14px; font-weight: 600; color: #333; }
+  .datepicker-nav button { background: none; border: 1px solid #ddd; border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 14px; color: #555; display: flex; align-items: center; justify-content: center; }
+  .datepicker-nav button:hover { background: #f5f5f5; }
+  .datepicker-grid { display: grid; grid-template-columns: repeat(7, 1fr); padding: 0 12px 8px; gap: 2px; }
+  .datepicker-dow { font-size: 10px; text-transform: uppercase; color: #aaa; font-weight: 600; text-align: center; padding: 4px 0; }
+  .datepicker-day { font-size: 13px; text-align: center; padding: 7px 0; border-radius: 8px; cursor: pointer; color: #333; border: none; background: none; }
+  .datepicker-day:hover:not(.dp-disabled):not(.dp-empty) { background: #eef4fb; }
+  .datepicker-day.dp-today { font-weight: 700; color: #2471a3; }
+  .datepicker-day.dp-current { background: #e8f0fe; font-weight: 600; }
+  .datepicker-day.dp-selected { background: #2471a3; color: white; font-weight: 600; }
+  .datepicker-day.dp-disabled { color: #ccc; cursor: default; }
+  .datepicker-day.dp-empty { cursor: default; }
+  .datepicker-today-bar { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-top: 1px solid #f0f0f0; font-size: 12px; color: #888; }
+  .datepicker-today-btn { background: none; border: none; color: #2471a3; cursor: pointer; font-size: 12px; font-weight: 500; }
+  .datepicker-today-btn:hover { text-decoration: underline; }
+  .datepicker-footer { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px 14px; border-top: 1px solid #f0f0f0; }
+  .datepicker-footer button { padding: 7px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .datepicker-cancel { background: white; border: 1px solid #ddd; color: #555; }
+  .datepicker-cancel:hover { background: #f5f5f5; }
+  .datepicker-save { background: #2471a3; border: none; color: white; }
+  .datepicker-save:hover { background: #1a5276; }
+  .datepicker-save:disabled { background: #a0c4e8; cursor: default; }
+
+  .appt-item { padding: 10px 0; border-bottom: 1px solid #f5f5f5; cursor: pointer; }
+  .appt-item:last-child { border-bottom: none; }
+  .appt-row { display: flex; gap: 12px; align-items: flex-start; }
+  .appt-date-box { background: #f0f4f8; border-radius: 8px; padding: 6px 10px; text-align: center; min-width: 52px; flex-shrink: 0; }
+  .appt-date-month { font-size: 10px; text-transform: uppercase; color: #888; font-weight: 600; }
+  .appt-date-day { font-size: 18px; font-weight: 700; color: #1a1a2e; }
+  .appt-date-year { font-size: 9px; color: #aaa; font-weight: 600; margin-top: -2px; }
+  .appt-info { flex: 1; }
+  .appt-title { font-size: 14px; color: #1a1a2e; font-weight: 500; }
+  .appt-provider { font-size: 12px; color: #666; margin-top: 2px; }
+  .appt-dept { font-size: 11px; color: #999; margin-top: 1px; }
+  .appt-expand-icon { color: #ccc; font-size: 12px; margin-left: auto; padding: 4px 0; flex-shrink: 0; transition: transform 0.2s; }
+  .appt-item.expanded .appt-expand-icon { transform: rotate(90deg); }
+  .appt-details { display: none; margin: 10px 0 4px 64px; padding: 10px 14px; background: #f8f9fb; border-radius: 8px; font-size: 12px; color: #555; line-height: 1.7; }
+  .appt-item.expanded .appt-details { display: block; }
+  .appt-details .appt-detail-row { display: flex; gap: 8px; }
+  .appt-details .appt-detail-label { color: #999; min-width: 80px; flex-shrink: 0; font-weight: 600; text-transform: uppercase; font-size: 10px; padding-top: 2px; }
+  .appt-details .appt-detail-value { color: #333; }
+  .appt-empty { font-size: 13px; color: #bbb; padding: 20px 0; text-align: center; }
+  .appt-year-group { margin-bottom: 8px; }
+  .appt-year-header { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 8px 0; user-select: none; }
+  .appt-year-header:hover { opacity: 0.8; }
+  .appt-year-label { font-size: 14px; font-weight: 700; color: #1a1a2e; }
+  .appt-year-count { font-size: 11px; color: #999; }
+  .appt-year-chevron { color: #ccc; font-size: 11px; transition: transform 0.2s; }
+  .appt-year-group.collapsed .appt-year-chevron { transform: rotate(-90deg); }
+  .appt-year-group.collapsed .appt-year-items { display: none; }
+
+  .appt-note-section { margin-top: 10px; border-top: 1px solid #e8e8e8; padding-top: 10px; }
+  .appt-note-toggle { font-size: 12px; color: #2471a3; cursor: pointer; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+  .appt-note-toggle:hover { color: #1a5276; text-decoration: underline; }
+  .appt-note-content { margin-top: 8px; padding: 12px 16px; background: white; border: 1px solid #e8e8e8; border-radius: 8px; font-size: 13px; line-height: 1.6; color: #333; max-height: 400px; overflow-y: auto; }
+  .appt-note-content div { max-width: 100% !important; }
+  .appt-note-content ol, .appt-note-content ul { padding-left: 20px; }
+  .appt-note-loading { font-size: 12px; color: #999; font-style: italic; padding: 8px 0; }
+  .appt-note-error { font-size: 12px; color: #e74c3c; padding: 8px 0; }
+  .appt-note-count { font-size: 11px; color: #999; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -526,17 +636,47 @@
 
 <nav>
   <h1><img src="/logo/bina-icon.svg" alt="Bina Health">Bina Health</h1>
-  <a href="#" data-page="profile">Me</a>
-  <a href="#" class="active" data-page="search">Search</a>
-  <a href="#" data-page="timeline">Timeline</a>
-  <a href="#" data-page="meds">Meds</a>
+  <a href="#" class="active" data-page="home">Home</a>
   <a href="#" data-page="assistant"><span class="ast-name">Assistant</span></a>
+  <a href="#" data-page="meds">Meds</a>
+  <a href="#" data-page="profile">Me</a>
+  <a href="#" data-page="timeline">Timeline</a>
+  <a href="#" data-page="search">Search</a>
 </nav>
 <div class="status-bar" id="status-bar">
   <span class="status-item"><span class="status-dot gray" id="dot-hapi"></span> HAPI FHIR: <span id="status-hapi">checking...</span></span>
   <span class="status-item"><span class="status-dot gray" id="dot-search"></span> Full-text search: <span id="status-search">checking...</span></span>
   <span class="status-item"><span class="status-dot gray" id="dot-data"></span> Resources: <span id="status-data">checking...</span></span>
   <span id="status-issues" style="margin-left: auto;"></span>
+</div>
+
+<!-- ═══════════════ HOME PAGE ═══════════════ -->
+<div id="page-home" class="page active">
+  <div id="home-greeting"></div>
+  <div id="home-date"></div>
+  <div class="home-grid">
+    <div class="home-card">
+      <div class="home-card-title">
+        Reminders
+        <span id="home-reminder-badge"></span>
+      </div>
+      <div id="home-reminders">
+        <div class="reminder-empty">Loading reminders...</div>
+      </div>
+    </div>
+    <div class="home-card">
+      <div class="home-card-title">Upcoming Appointments</div>
+      <div id="home-appointments">
+        <div class="appt-empty">Loading appointments...</div>
+      </div>
+    </div>
+    <div class="home-card full-width">
+      <div class="home-card-title">Past Appointments</div>
+      <div id="home-past-appointments">
+        <div class="appt-empty">Loading past appointments...</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════ PROFILE PAGE ═══════════════ -->
@@ -547,7 +687,7 @@
 </div>
 
 <!-- ═══════════════ SEARCH PAGE ═══════════════ -->
-<div id="page-search" class="page active">
+<div id="page-search" class="page">
   <div class="search-container">
     <div class="search-bar">
       <input type="text" id="search-input" list="search-history" placeholder="Search your health records (e.g., bone lesion, teclistamab, enterography)" autocomplete="off">
@@ -856,6 +996,10 @@ function showPage(page) {
   if (page === 'assistant' && typeof astInitialized !== 'undefined' && !astInitialized) initAssistant();
   if (page === 'meds' && typeof medsInitialized !== 'undefined' && !medsInitialized) initMeds();
   if (page === 'profile' && typeof profileInitialized !== 'undefined' && !profileInitialized) initProfile();
+  if (page === 'home') {
+    if (typeof homeInitialized !== 'undefined' && !homeInitialized) initHome();
+    else if (typeof loadReminders === 'function') loadReminders();
+  }
   history.replaceState(null, '', '#' + page);
 }
 
@@ -2994,12 +3138,22 @@ async function astSelectThread(threadId) {
       astNewThread();
       return;
     }
+    let lastDateStr = '';
     container.innerHTML = messages.map(m => {
+      let dateSep = '';
+      if (m.created_at) {
+        const d = new Date(m.created_at);
+        const dateStr = d.toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
+        if (dateStr !== lastDateStr) {
+          lastDateStr = dateStr;
+          dateSep = `<div class="ast-date-sep">${escHtml(dateStr)}</div>`;
+        }
+      }
       if (m.role === 'user') {
-        return `<div class="ast-msg user">${escHtml(m.content)}</div>`;
+        return dateSep + `<div class="ast-msg user">${escHtml(m.content)}</div>`;
       } else {
         const modelTag = m.model ? `<div class="ast-model-tag">${escHtml(m.model)}</div>` : '';
-        return `<div class="ast-msg assistant">${modelTag}${astRenderMarkdown(m.content)}</div>`;
+        return dateSep + `<div class="ast-msg assistant">${modelTag}${astRenderMarkdown(m.content)}</div>`;
       }
     }).join('');
     container.scrollTop = container.scrollHeight;
@@ -3059,6 +3213,15 @@ async function astSend(opts = {}) {
 
   // Add user message bubble (skip if re-sending for stop)
   if (!opts.skipUserBubble) {
+    // Insert date separator if needed
+    const todayStr = new Date().toLocaleDateString('en-US', {weekday:'long', month:'long', day:'numeric', year:'numeric'});
+    const lastSep = container.querySelector('.ast-date-sep:last-of-type');
+    if (!lastSep || lastSep.textContent !== todayStr) {
+      const sep = document.createElement('div');
+      sep.className = 'ast-date-sep';
+      sep.textContent = todayStr;
+      container.appendChild(sep);
+    }
     const userBubble = document.createElement('div');
     userBubble.className = 'ast-msg user';
     userBubble.textContent = message;
@@ -3091,6 +3254,18 @@ async function astSend(opts = {}) {
       signal: astAbortController.signal,
     });
 
+    if (!resp.ok) {
+      let errMsg = 'Server error (' + resp.status + ')';
+      try { const errBody = await resp.json(); errMsg = errBody.error || errBody.detail || errMsg; } catch (e) {
+        try { errMsg = await resp.text() || errMsg; } catch (e2) {} }
+      astBubble.className = 'ast-msg error';
+      astBubble.textContent = errMsg;
+      astStreaming = false;
+      astAbortController = null;
+      document.getElementById('ast-send-btn').disabled = false;
+      return;
+    }
+
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let fullText = '';
@@ -3099,8 +3274,30 @@ async function astSend(opts = {}) {
     let toolIndicators = []; // track for final render
     let proposedCards = []; // track proposed action cards so they survive re-renders
 
+    let lastDataTime = Date.now();
+    const STREAM_TIMEOUT = 120000; // 2 minutes with no data = timeout
+
     while (true) {
-      const { done, value } = await reader.read();
+      // Race between reader and timeout
+      const readPromise = reader.read();
+      const timeoutPromise = new Promise((_, reject) => {
+        const remaining = STREAM_TIMEOUT - (Date.now() - lastDataTime);
+        setTimeout(() => reject(new Error('timeout')), Math.max(remaining, 1000));
+      });
+      let readResult;
+      try {
+        readResult = await Promise.race([readPromise, timeoutPromise]);
+      } catch (e) {
+        if (e.message === 'timeout') {
+          astBubble.className = 'ast-msg error';
+          astBubble.textContent = 'Response timed out — the assistant took too long. Try a simpler question or check that the API is running.';
+          reader.cancel();
+          break;
+        }
+        throw e;
+      }
+      lastDataTime = Date.now();
+      const { done, value } = readResult;
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
@@ -3202,27 +3399,48 @@ async function astSend(opts = {}) {
               update_medication_status: 'Update Medication',
               add_medication: 'Add Medication',
               add_note: 'Add Note',
+              create_reminder: 'Create Reminder',
             };
             const actionIcons = {
               add_observation: '📊', update_medication_status: '💊',
-              add_medication: '➕', add_note: '📝',
+              add_medication: '➕', add_note: '📝', create_reminder: '🔔',
             };
             const cardId = 'proposal-' + Date.now();
             const label = actionLabels[data.action_type] || 'Update Record';
             const icon = actionIcons[data.action_type] || '📋';
-            const friendlyKeys = { name: 'Name', value: 'Value', unit: 'Unit', date: 'Date', category: 'Category', category_display: 'Category', med_key: 'Medication', display_name: 'Display name', status: 'Status', dosage: 'Dosage', frequency: 'Frequency', note: 'Note', notes: 'Notes', title: 'Title', text: 'Text', type: 'Type' };
-            const paramEntries = data.params ? Object.entries(data.params)
-              .filter(([k,v]) => v && k !== 'coding' && k !== 'components' && k !== 'category_display')
-              .map(([k,v]) => `<span style="color:#7f8c8d">${escHtml(friendlyKeys[k] || k)}:</span> <span style="color:#2c3e50;font-weight:500">${escHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))}</span>`)
-              : [];
+
+            let paramEntries = [];
+            if (data.action_type === 'create_reminder' && data.params) {
+              const p = data.params;
+              if (p.message) paramEntries.push(`<div class="prop-row"><span class="prop-label">What</span><span class="prop-value">${escHtml(p.message)}</span></div>`);
+              if (p.due_at) {
+                let friendly = p.due_at;
+                try { friendly = new Date(p.due_at).toLocaleDateString('en-US', {weekday:'long', year:'numeric', month:'long', day:'numeric'}); } catch(e) {}
+                paramEntries.push(`<div class="prop-row"><span class="prop-label">When</span><span class="prop-value">${escHtml(friendly)}</span></div>`);
+              }
+              if (p.context) paramEntries.push(`<div class="prop-row"><span class="prop-label">Context</span><span class="prop-value">${escHtml(p.context)}</span></div>`);
+              if (p.linked_med) paramEntries.push(`<div class="prop-row"><span class="prop-label">Medication</span><span class="prop-value">${escHtml(p.linked_med)}</span></div>`);
+              if (p.linked_condition) paramEntries.push(`<div class="prop-row"><span class="prop-label">Condition</span><span class="prop-value">${escHtml(p.linked_condition)}</span></div>`);
+              if (p.priority && p.priority !== 'normal') paramEntries.push(`<div class="prop-row"><span class="prop-label">Priority</span><span class="prop-value">${escHtml(p.priority)}</span></div>`);
+              if (p.actions && p.actions.length) {
+                const optionsHtml = p.actions.map((a, i) => `<div class="prop-option"><span class="prop-option-num">${i+1}.</span> ${escHtml(a.label || '')}</div>`).join('');
+                paramEntries.push(`<div class="prop-row"><span class="prop-label">When this fires, you can</span><div class="prop-options">${optionsHtml}</div></div>`);
+              }
+            } else {
+              const friendlyKeys = { name: 'Name', value: 'Value', unit: 'Unit', date: 'Date', category: 'Category', category_display: 'Category', med_key: 'Medication', display_name: 'Display name', status: 'Status', dosage: 'Dosage', frequency: 'Frequency', note: 'Note', notes: 'Notes', title: 'Title', text: 'Text', type: 'Type' };
+              paramEntries = data.params ? Object.entries(data.params)
+                .filter(([k,v]) => v && k !== 'coding' && k !== 'components' && k !== 'category_display')
+                .map(([k,v]) => `<div class="prop-row"><span class="prop-label">${escHtml(friendlyKeys[k] || k)}</span><span class="prop-value">${escHtml(typeof v === 'object' ? JSON.stringify(v) : String(v))}</span></div>`)
+                : [];
+            }
             const cardHtml = `<div class="ast-proposed-action" id="${cardId}">
               <div class="ast-proposed-header">
                 <div class="ast-proposed-icon">${icon}</div>
                 <div class="ast-proposed-title">${escHtml(label)}</div>
               </div>
               <div class="ast-proposed-summary">${escHtml(data.summary)}</div>
-              ${paramEntries.length ? `<div class="ast-proposed-detail">${paramEntries.join('<br>')}</div>` : ''}
-              <div class="ast-proposed-tag">Will be tagged as patient-entered data</div>
+              ${paramEntries.length ? `<div class="ast-proposed-detail">${paramEntries.join('')}</div>` : ''}
+              <div class="ast-proposed-tag">${data.action_type === 'create_reminder' ? 'Reminder will appear on your Home page' : 'Will be tagged as patient-entered data'}</div>
               <div class="ast-proposed-btns">
                 <button class="ast-proposed-approve" onclick="astApproveAction('${cardId}', ${escAttr(JSON.stringify({action_type: data.action_type, summary: data.summary, params: data.params}))})">Approve</button>
                 <button class="ast-proposed-reject" onclick="astRejectAction('${cardId}')">Dismiss</button>
@@ -4682,6 +4900,602 @@ function medsShowToast(medName) {
 refreshDatalist('search');
 refreshDatalist('event');
 checkHealth();
+
+// ═══════════════════════════════════════════════════════════════
+//  HOME PAGE — Reminders + Upcoming Appointments
+// ═══════════════════════════════════════════════════════════════
+let homeInitialized = false;
+
+function initHome() {
+  homeInitialized = true;
+  renderHomeGreeting();
+  loadReminders();
+  loadUpcomingAppointments();
+}
+
+function renderHomeGreeting() {
+  const el = document.getElementById('home-greeting');
+  const dateEl = document.getElementById('home-date');
+  const hour = new Date().getHours();
+  let greeting = 'Good evening';
+  if (hour < 12) greeting = 'Good morning';
+  else if (hour < 17) greeting = 'Good afternoon';
+  el.className = 'home-greeting';
+  el.textContent = greeting + ', Uri';
+  dateEl.className = 'home-date';
+  dateEl.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+async function loadReminders() {
+  const container = document.getElementById('home-reminders');
+  const badge = document.getElementById('home-reminder-badge');
+  try {
+    const resp = await fetch('/api/reminders');
+    if (!resp.ok) throw new Error('API ' + resp.status);
+    const data = await resp.json();
+    const reminders = data.reminders || [];
+
+    // Also update nav badge
+    const activeCount = reminders.filter(r => r.status === 'active').length;
+    const overdueCount = reminders.filter(r => r.due_status === 'overdue').length;
+    if (overdueCount > 0) {
+      badge.innerHTML = '<span class="reminder-badge">' + overdueCount + '</span>';
+    } else if (activeCount > 0) {
+      badge.innerHTML = '<span class="reminder-badge" style="background:#f39c12">' + activeCount + '</span>';
+    } else {
+      badge.innerHTML = '';
+    }
+
+    if (reminders.length === 0) {
+      container.innerHTML = '<div class="reminder-empty">No active reminders. Your assistant can create reminders during conversations.</div>';
+      return;
+    }
+
+    let html = '<ul class="reminder-list">';
+    for (const r of reminders) {
+      // Compute due status from actual date
+      let dueDateStr = '';
+      let daysUntil = null;
+      try {
+        const d = new Date(r.due_at);
+        dueDateStr = d.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+        const now = new Date();
+        daysUntil = Math.ceil((d - now) / 86400000);
+      } catch(e) {}
+
+      const isOverdue = daysUntil !== null && daysUntil < 0;
+      const isToday = daysUntil !== null && daysUntil >= 0 && daysUntil < 1;
+      const isTomorrow = daysUntil !== null && daysUntil >= 1 && daysUntil < 2;
+      const isFuture = daysUntil !== null && daysUntil >= 2;
+      const dueClass = isOverdue ? 'overdue' : isToday ? 'today' : 'upcoming';
+
+      html += '<li class="reminder-item' + (isFuture ? ' reminder-future' : '') + '" data-id="' + r.id + '">';
+      html += '<div class="reminder-header">';
+      html += '<span class="reminder-message">' + escapeHtml(r.message) + '</span>';
+      html += '</div>';
+
+      // Due date line
+      html += '<div class="reminder-due-line ' + dueClass + '">';
+      if (isOverdue) {
+        html += '⚠ Overdue — was due ' + escapeHtml(dueDateStr);
+      } else if (isToday) {
+        html += '📅 Due today';
+      } else if (isTomorrow) {
+        html += '📅 Due tomorrow';
+      } else if (isFuture) {
+        html += '🗓 Not yet due — ' + escapeHtml(dueDateStr) + ' (in ' + daysUntil + ' days)';
+      }
+      html += '</div>';
+
+      if (r.context) {
+        html += '<div class="reminder-context">' + escapeHtml(r.context) + '</div>';
+      }
+      // Primary actions: resolution buttons + snooze (hidden for future reminders)
+      html += '<div class="reminder-actions reminder-actions-primary">';
+      const actions = r.actions || [];
+      for (const a of actions) {
+        html += '<button class="reminder-action-btn primary" onclick="executeReminderAction(' + r.id + ',' + JSON.stringify(JSON.stringify(a)) + ')">' + escapeHtml(a.label) + '</button>';
+      }
+      html += '<button class="reminder-action-btn snooze" onclick="snoozeReminder(' + r.id + ')">Snooze 3d</button>';
+      html += '</div>';
+      // Secondary actions: reschedule + dismiss (always visible)
+      html += '<div class="reminder-actions reminder-actions-secondary">';
+      html += '<button class="reminder-action-btn" onclick="rescheduleReminder(' + r.id + ',\'' + (r.due_at || '') + '\')">Reschedule</button>';
+      html += '<button class="reminder-action-btn dismiss" onclick="dismissReminder(' + r.id + ')">Dismiss</button>';
+      html += '</div>';
+      html += '</li>';
+    }
+    html += '</ul>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="reminder-empty">Could not load reminders.</div>';
+    console.error('loadReminders:', e);
+  }
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function snoozeReminder(id) {
+  try {
+    await fetch('/api/reminders/' + id, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ snooze_days: 3 })
+    });
+    loadReminders();
+  } catch (e) { console.error(e); }
+}
+
+async function dismissReminder(id) {
+  try {
+    await fetch('/api/reminders/' + id, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ status: 'dismissed' })
+    });
+    loadReminders();
+  } catch (e) { console.error(e); }
+}
+
+function rescheduleReminder(id, currentDueAt) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  let viewYear = today.getFullYear(), viewMonth = today.getMonth();
+  let selectedDate = null;
+  let currentDate = null;
+  if (currentDueAt) {
+    try { currentDate = new Date(currentDueAt); currentDate.setHours(0,0,0,0); } catch(e) {}
+  }
+
+  // Build overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'datepicker-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function dateKey(d) { return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()); }
+  function fmtDisplay(d) { return d.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', year:'numeric'}); }
+
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const DOWS = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+
+  function render() {
+    const card = document.createElement('div');
+    card.className = 'datepicker-card';
+
+    // Header
+    let h = '<div class="datepicker-header"><span class="datepicker-title">Reschedule Reminder</span>';
+    h += '<button class="datepicker-close" id="dp-close">&times;</button></div>';
+
+    // Nav
+    h += '<div class="datepicker-nav"><button id="dp-prev">‹</button>';
+    h += '<span class="datepicker-month">' + MONTHS[viewMonth] + ' ' + viewYear + '</span>';
+    h += '<button id="dp-next">›</button></div>';
+
+    // Grid
+    h += '<div class="datepicker-grid">';
+    for (const d of DOWS) h += '<div class="datepicker-dow">' + d + '</div>';
+
+    const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    for (let i = 0; i < firstDay; i++) h += '<div class="datepicker-day dp-empty"></div>';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dt = new Date(viewYear, viewMonth, d);
+      const key = dateKey(dt);
+      const isPast = dt < today;
+      const isToday = key === dateKey(today);
+      const isCurrent = currentDate && key === dateKey(currentDate);
+      const isSelected = selectedDate && key === dateKey(selectedDate);
+      let cls = 'datepicker-day';
+      if (isPast) cls += ' dp-disabled';
+      if (isToday) cls += ' dp-today';
+      if (isCurrent && !isSelected) cls += ' dp-current';
+      if (isSelected) cls += ' dp-selected';
+      h += '<button class="' + cls + '" data-date="' + key + '"' + (isPast ? ' disabled' : '') + '>' + d + '</button>';
+    }
+    h += '</div>';
+
+    // Today bar
+    h += '<div class="datepicker-today-bar"><span>Today: ' + fmtDisplay(today) + '</span>';
+    h += '<button class="datepicker-today-btn" id="dp-go-today">Go to today</button></div>';
+
+    // Footer
+    h += '<div class="datepicker-footer">';
+    h += '<button class="datepicker-cancel" id="dp-cancel">Cancel</button>';
+    h += '<button class="datepicker-save" id="dp-save"' + (!selectedDate ? ' disabled' : '') + '>';
+    h += selectedDate ? 'Save — ' + fmtDisplay(selectedDate) : 'Pick a date';
+    h += '</button></div>';
+
+    card.innerHTML = h;
+    overlay.innerHTML = '';
+    overlay.appendChild(card);
+
+    // Wire events
+    card.querySelector('#dp-close').onclick = () => overlay.remove();
+    card.querySelector('#dp-cancel').onclick = () => overlay.remove();
+    card.querySelector('#dp-prev').onclick = () => { viewMonth--; if (viewMonth < 0) { viewMonth = 11; viewYear--; } render(); };
+    card.querySelector('#dp-next').onclick = () => { viewMonth++; if (viewMonth > 11) { viewMonth = 0; viewYear++; } render(); };
+    card.querySelector('#dp-go-today').onclick = () => { viewYear = today.getFullYear(); viewMonth = today.getMonth(); render(); };
+
+    card.querySelectorAll('.datepicker-day:not(.dp-disabled):not(.dp-empty)').forEach(btn => {
+      btn.onclick = () => {
+        const parts = btn.dataset.date.split('-');
+        selectedDate = new Date(+parts[0], +parts[1]-1, +parts[2]);
+        render();
+      };
+    });
+
+    const saveBtn = card.querySelector('#dp-save');
+    if (saveBtn && selectedDate) {
+      saveBtn.onclick = async () => {
+        overlay.remove();
+        try {
+          await fetch('/api/reminders/' + id, {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ due_at: dateKey(selectedDate) + 'T09:00:00Z' })
+          });
+          loadReminders();
+        } catch (e) { console.error(e); }
+      };
+    }
+  }
+
+  // Start on the month of the current due date if it exists and is in the future
+  if (currentDate && currentDate >= today) {
+    viewYear = currentDate.getFullYear();
+    viewMonth = currentDate.getMonth();
+  }
+
+  document.body.appendChild(overlay);
+  render();
+}
+
+async function executeReminderAction(reminderId, actionJson) {
+  const action = JSON.parse(actionJson);
+  // For now, mark the reminder as completed and execute the action if it's a known type
+  if (action.action_type === 'update_medication_status' && action.params) {
+    try {
+      await fetch('/api/meds/override', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(action.params)
+      });
+    } catch (e) { console.error('Med action failed:', e); }
+  }
+  // Mark reminder completed
+  try {
+    await fetch('/api/reminders/' + reminderId, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ status: 'completed' })
+    });
+    loadReminders();
+  } catch (e) { console.error(e); }
+}
+
+function parseApptFields(appt) {
+  const start = appt.start || appt.period?.start || '';
+  const end = appt.period?.end || '';
+  const d = start ? new Date(start) : null;
+  const month = d ? d.toLocaleDateString('en-US', {month: 'short'}).toUpperCase() : '';
+  const day = d ? d.getDate() : '';
+  const year = d ? d.getFullYear() : '';
+  const time = d ? d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit'}) : '';
+  const fullDate = d ? d.toLocaleDateString('en-US', {weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'}) : '';
+
+  const title = appt.description || appt.type?.[0]?.text || appt.type?.[0]?.coding?.[0]?.display
+    || appt.serviceType?.[0]?.text || appt.reasonCode?.[0]?.text || 'Appointment';
+  const classDisplay = appt.class?.display || appt.class?.code || '';
+
+  // Provider = first participant with individual.display
+  const provider = appt.participant
+    ?.map(p => p.individual?.display || p.actor?.display).filter(Boolean).join(', ') || '';
+  const dept = appt.serviceProvider?.display || '';
+  const location = appt.location?.map(l => l.location?.display).filter(Boolean).join(', ') || '';
+  const status = appt.status || '';
+  const reason = appt.reasonCode?.map(r => r.text || r.coding?.[0]?.display).filter(Boolean).join(', ') || '';
+  const resourceType = appt.resourceType || '';
+  const id = appt.id || '';
+  const identifiers = appt.identifier || [];
+
+  return { start, end, d, month, day, year, time, fullDate, title, classDisplay, provider, dept, location, status, reason, resourceType, id, identifiers };
+}
+
+function renderApptItem(fields) {
+  const { month, day, year, title, provider, dept, time, fullDate, classDisplay, location, status, reason, resourceType, id, identifiers, start } = fields;
+  let detailRows = '';
+  if (fullDate) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Date</span><span class="appt-detail-value">' + escapeHtml(fullDate) + (time ? ' at ' + escapeHtml(time) : '') + '</span></div>';
+  if (classDisplay) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Type</span><span class="appt-detail-value">' + escapeHtml(classDisplay) + '</span></div>';
+  if (provider) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Provider</span><span class="appt-detail-value">' + escapeHtml(provider) + '</span></div>';
+  if (dept) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Department</span><span class="appt-detail-value">' + escapeHtml(dept) + '</span></div>';
+  if (location) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Location</span><span class="appt-detail-value">' + escapeHtml(location) + '</span></div>';
+  if (reason) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Reason</span><span class="appt-detail-value">' + escapeHtml(reason) + '</span></div>';
+  if (status) detailRows += '<div class="appt-detail-row"><span class="appt-detail-label">Status</span><span class="appt-detail-value">' + escapeHtml(status) + '</span></div>';
+
+  // Check if this encounter has notes with available content
+  const allDocs = getDocsForEncounter(id, identifiers, start);
+  const viewableDocs = allDocs.filter(d => d.contentAvailable);
+  const hasNotes = viewableDocs.length > 0;
+
+  if (hasNotes) {
+    detailRows += '<div class="appt-note-section">';
+    detailRows += '<div style="font-weight: 600; font-size: 12px; color: #1a1a2e; margin-bottom: 8px;">Clinical Notes (' + viewableDocs.length + ')</div>';
+    for (const doc of viewableDocs) {
+      const noteDate = doc.date ? new Date(doc.date).toLocaleDateString('en-US', {year: 'numeric', month: 'short', day: 'numeric'}) : '';
+      const noteUid = 'note-' + (++_noteUidCounter);
+      const binaryId = doc.binaryUrl.replace('Binary/', '');
+      detailRows += '<div style="margin-bottom: 8px;">';
+      detailRows += '<div style="font-size: 12px; color: #333;">' + escapeHtml(doc.noteType) + '</div>';
+      if (doc.author || noteDate) {
+        detailRows += '<div style="font-size: 11px; color: #888;">';
+        if (doc.author) detailRows += escapeHtml(doc.author);
+        if (doc.author && noteDate) detailRows += ' &middot; ';
+        if (noteDate) detailRows += escapeHtml(noteDate);
+        detailRows += '</div>';
+      }
+      detailRows += '<div id="' + noteUid + '">';
+      detailRows += '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + noteUid + '\', \'' + escapeHtml(binaryId) + '\')">&#128462; View full note</span>';
+      detailRows += '</div>';
+      detailRows += '</div>';
+    }
+    detailRows += '</div>';
+  }
+
+  // Note badge for summary line — only for viewable notes
+  const noteBadge = hasNotes ? ' <span style="font-size:11px; color:#2471a3;" title="' + viewableDocs.length + ' clinical note(s)">&#128196; ' + viewableDocs.length + '</span>' : '';
+
+  let html = '<div class="appt-item" onclick="toggleApptItem(this, \'' + escapeHtml(id) + '\')">';
+  html += '<div class="appt-row">';
+  html += '<div class="appt-date-box"><div class="appt-date-month">' + month + '</div><div class="appt-date-day">' + day + '</div><div class="appt-date-year">' + year + '</div></div>';
+  html += '<div class="appt-info"><div class="appt-title">' + escapeHtml(title) + noteBadge + '</div>';
+  if (provider) html += '<div class="appt-provider">' + escapeHtml(provider) + '</div>';
+  if (dept) html += '<div class="appt-dept">' + escapeHtml(dept) + '</div>';
+  html += '</div>';
+  html += '<div class="appt-expand-icon">&#9654;</div>';
+  html += '</div>';
+  html += '<div class="appt-details">' + detailRows + '</div>';
+  html += '</div>';
+  return html;
+}
+
+let _noteUidCounter = 0;
+
+function toggleApptItem(el) {
+  el.classList.toggle('expanded');
+}
+
+async function loadBinaryNoteInto(containerId, binaryId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  // Toggle if already loaded
+  const existing = container.querySelector('.appt-note-content');
+  if (existing) {
+    const isHidden = existing.style.display === 'none';
+    existing.style.display = isHidden ? '' : 'none';
+    const toggle = container.querySelector('.appt-note-toggle');
+    if (toggle) toggle.innerHTML = isHidden ? '&#128462; Hide full note' : '&#128462; View full note';
+    return;
+  }
+
+  container.innerHTML = '<div class="appt-note-loading">Loading note content...</div>';
+
+  try {
+    const resp = await fetch('/fhir/Binary/' + encodeURIComponent(binaryId), {
+      headers: { 'Accept': 'application/fhir+json' }
+    });
+    if (resp.status === 404) {
+      container.innerHTML = '<div style="font-size:11px; color:#aaa; font-style:italic;">Note content not available.</div>';
+      return;
+    }
+    if (!resp.ok) throw new Error('Server returned ' + resp.status);
+
+    const binary = await resp.json();
+    if (binary.data && binary.contentType?.includes('html')) {
+      const decoded = atob(binary.data);
+      container.innerHTML = '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + containerId + '\', \'' + binaryId + '\')">&#128462; Hide full note</span><div class="appt-note-content">' + decoded + '</div>';
+    } else if (binary.data && binary.contentType?.includes('rtf')) {
+      container.innerHTML = '<div style="font-size:11px; color:#aaa; font-style:italic;">Note is in RTF format (not viewable in browser).</div>';
+    } else {
+      container.innerHTML = '<div style="font-size:11px; color:#aaa; font-style:italic;">Note format not supported for inline viewing.</div>';
+    }
+  } catch (e) {
+    container.innerHTML = '<div class="appt-note-error">Could not load note: ' + escapeHtml(e.message) + '</div>';
+    console.error('loadBinaryNoteInto:', e);
+  }
+}
+
+async function fetchAllPages(baseUrl) {
+  let all = [];
+  let url = baseUrl;
+  while (url && all.length < 5000) {
+    const resp = await fetch(url);
+    if (!resp.ok) break;
+    const bundle = await resp.json();
+    all = all.concat((bundle.entry || []).map(e => e.resource));
+    const nextLink = (bundle.link || []).find(l => l.relation === 'next');
+    if (!nextLink) break;
+    // Convert absolute HAPI URL to relative path
+    url = nextLink.url;
+    if (url.includes('://')) {
+      const u = new URL(url);
+      url = '/fhir' + u.search;
+    }
+  }
+  return all;
+}
+
+async function fetchAllEncounters() {
+  // Fetch both Appointment and Encounter resources, paginating through all
+  const [appointments, encounters] = await Promise.all([
+    fetchAllPages('/fhir/Appointment?_sort=-date&_count=200'),
+    fetchAllPages('/fhir/Encounter?_sort=-date&_count=200')
+  ]);
+  let all = appointments.concat(encounters);
+  // Sort all by date descending
+  all.sort((a, b) => {
+    const da = new Date(a.start || a.period?.start || 0);
+    const db = new Date(b.start || b.period?.start || 0);
+    return db - da;
+  });
+  return all;
+}
+
+// ── Document Reference Index ──────────────────────────────────────────
+// Pre-fetch all DocumentReferences and build a lookup map
+const _docIndex = {};       // encounterRef → [{docId, noteType, date, author, binaryUrl}]
+const _docByDate = {};      // YYYY-MM-DD → [{...}]  fallback matching
+let _docIndexReady = false;
+
+async function buildDocumentIndex() {
+  try {
+    // Fetch DocumentReferences and Binary IDs in parallel
+    const [allDocs, allBinaries] = await Promise.all([
+      fetchAllPages('/fhir/DocumentReference?_count=200&_elements=id,type,date,author,content,context'),
+      fetchAllPages('/fhir/Binary?_count=500&_elements=id')
+    ]);
+    // Build set of existing Binary IDs
+    const binaryIds = new Set(allBinaries.map(b => b.id));
+
+    for (const doc of allDocs) {
+      const htmlAtt = doc.content?.find(c => c.attachment?.contentType === 'text/html');
+      const binaryUrl = htmlAtt?.attachment?.url || '';
+      const noteType = doc.type?.text || doc.type?.coding?.[0]?.display || 'Clinical Note';
+      const noteDate = doc.date || '';
+      const author = doc.author?.map(a => a.display).filter(Boolean).join(', ')
+        || doc.extension?.find(e => e.url?.includes('attester'))
+            ?.extension?.find(e => e.url === 'party')?.valueReference?.display || '';
+
+      const binaryId = binaryUrl ? binaryUrl.replace('Binary/', '') : '';
+      const contentAvailable = binaryId ? binaryIds.has(binaryId) : false;
+      const info = { docId: doc.id, noteType, date: noteDate, author, binaryUrl, hasHtml: !!binaryUrl, contentAvailable };
+
+      // Index by encounter reference
+      const encRefs = doc.context?.encounter || [];
+      for (const enc of encRefs) {
+        if (enc.reference) {
+          const key = enc.reference; // e.g. "Encounter/abc123"
+          if (!_docIndex[key]) _docIndex[key] = [];
+          _docIndex[key].push(info);
+        }
+        // Also index by encounter identifier value (CSN)
+        if (enc.identifier?.value) {
+          const idKey = 'ident:' + enc.identifier.value;
+          if (!_docIndex[idKey]) _docIndex[idKey] = [];
+          _docIndex[idKey].push(info);
+        }
+      }
+
+      // Also index by date for fallback matching
+      if (noteDate) {
+        const dateKey = noteDate.substring(0, 10); // YYYY-MM-DD
+        if (!_docByDate[dateKey]) _docByDate[dateKey] = [];
+        _docByDate[dateKey].push(info);
+      }
+    }
+    _docIndexReady = true;
+    console.log('Document index built:', allDocs.length, 'docs,', Object.keys(_docIndex).length, 'encounter links,', binaryIds.size, 'binaries available');
+  } catch (e) {
+    console.error('buildDocumentIndex:', e);
+    _docIndexReady = true; // Mark ready even on error so UI doesn't hang
+  }
+}
+
+function getDocsForEncounter(encId, encIdentifiers, dateStr) {
+  // 1. Try direct encounter reference match
+  const refKey = 'Encounter/' + encId;
+  if (_docIndex[refKey]?.length) return _docIndex[refKey];
+
+  // 2. Try identifier match (CSN)
+  if (encIdentifiers) {
+    for (const ident of encIdentifiers) {
+      const idKey = 'ident:' + ident.value;
+      if (_docIndex[idKey]?.length) return _docIndex[idKey];
+    }
+  }
+
+  // 3. Fallback: match by date
+  if (dateStr) {
+    const dateKey = dateStr.substring(0, 10);
+    if (_docByDate[dateKey]?.length) return _docByDate[dateKey];
+  }
+
+  return [];
+}
+
+async function loadUpcomingAppointments() {
+  const upcomingContainer = document.getElementById('home-appointments');
+  const pastContainer = document.getElementById('home-past-appointments');
+  try {
+    // Build document index in parallel with encounter fetch
+    const [all] = await Promise.all([
+      fetchAllEncounters(),
+      buildDocumentIndex()
+    ]);
+    const now = new Date();
+
+    const upcoming = [];
+    const past = [];
+    for (const appt of all) {
+      const fields = parseApptFields(appt);
+      if (fields.d && fields.d >= now) {
+        upcoming.push(fields);
+      } else {
+        past.push(fields);
+      }
+    }
+
+    // Upcoming: sorted ascending (soonest first)
+    upcoming.sort((a, b) => (a.d || 0) - (b.d || 0));
+
+    if (upcoming.length === 0) {
+      upcomingContainer.innerHTML = '<div class="appt-empty">No upcoming appointments found.</div>';
+    } else {
+      upcomingContainer.innerHTML = upcoming.map(f => renderApptItem(f)).join('');
+    }
+
+    // Past: grouped by year, most recent year first
+    if (past.length === 0) {
+      pastContainer.innerHTML = '<div class="appt-empty">No past appointments found.</div>';
+    } else {
+      const byYear = {};
+      for (const f of past) {
+        const y = f.year || 'Unknown';
+        if (!byYear[y]) byYear[y] = [];
+        byYear[y].push(f);
+      }
+      const years = Object.keys(byYear).sort((a, b) => b - a);
+      let html = '';
+      for (const y of years) {
+        const items = byYear[y];
+        // Most recent year expanded, rest collapsed
+        const collapsed = y !== years[0] ? ' collapsed' : '';
+        html += '<div class="appt-year-group' + collapsed + '">';
+        html += '<div class="appt-year-header" onclick="this.parentElement.classList.toggle(\'collapsed\')">';
+        html += '<span class="appt-year-chevron">&#9654;</span>';
+        html += '<span class="appt-year-label">' + escapeHtml(String(y)) + '</span>';
+        html += '<span class="appt-year-count">' + items.length + ' visit' + (items.length !== 1 ? 's' : '') + '</span>';
+        html += '</div>';
+        html += '<div class="appt-year-items">';
+        html += items.map(f => renderApptItem(f)).join('');
+        html += '</div></div>';
+      }
+      pastContainer.innerHTML = html;
+    }
+  } catch (e) {
+    upcomingContainer.innerHTML = '<div class="appt-empty">Could not load appointments.</div>';
+    pastContainer.innerHTML = '<div class="appt-empty">Could not load past appointments.</div>';
+    console.error('loadAppointments:', e);
+  }
+}
+
+// Auto-init home if it's the active page on load
+if (document.getElementById('page-home')?.classList.contains('active')) {
+  initHome();
+}
 </script>
 </body>
 </html>
