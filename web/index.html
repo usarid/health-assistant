@@ -3560,6 +3560,11 @@ async function astApproveAction(cardId, actionData) {
       const resourceInfo = result.resource_type ? ` (${result.resource_type}${result.id ? ' #' + result.id : ''})` : '';
       resultDiv.textContent = `✓ Recorded successfully${resourceInfo}`;
       card.querySelector('.ast-proposed-btns').after(resultDiv);
+      // Invalidate meds cache so the Meds tab reloads on next visit
+      if (result.action_type === 'update_medication_status' || result.action_type === 'add_medication') {
+        medsData = [];
+        medsInitialized = false;
+      }
     } else {
       card.querySelector('.ast-proposed-approve').textContent = 'Approve';
       card.querySelector('.ast-proposed-approve').disabled = false;
@@ -5163,6 +5168,9 @@ async function executeReminderAction(reminderId, actionJson) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(action.params)
       });
+      // Invalidate meds cache
+      medsData = [];
+      medsInitialized = false;
     } catch (e) { console.error('Med action failed:', e); }
   }
   // Mark reminder completed

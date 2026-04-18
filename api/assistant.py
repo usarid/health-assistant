@@ -194,12 +194,15 @@ async def execute_proposed_action(action: dict) -> dict:
 
         elif action_type == "update_medication_status":
             # Use the existing meds.py override system
-            from meds import get_db as get_meds_db
+            from meds import get_db as get_meds_db, normalize_med_name, get_aliases, resolve_key
             med_key = params.get("med_key", "")
             new_status = params.get("status", "")
             display_name = params.get("display_name", "")
             if not med_key or not new_status:
                 return {"error": "med_key and status are required"}
+            # Normalize the key so it matches the meds grouping logic
+            aliases = await get_aliases()
+            med_key = resolve_key(normalize_med_name(med_key), aliases)
             db = await get_meds_db()
             await db.execute(
                 """INSERT INTO med_overrides (med_key, display_name, status, notes, user_dosage, user_frequency, updated_at)
@@ -358,7 +361,7 @@ async def gather_patient_context() -> str:
                 "not_taking": "NOT TAKING (patient confirmed)",
                 "as_needed": "AS NEEDED (patient confirmed)",
             }
-            parts = [f"- {med['display']}"]
+            parts = [f"- {med['display']} [key: {med['key']}]"]
             if med.get("user_override"):
                 parts.append(f"[{status_label.get(med['user_override'], med['user_override'])}]")
             elif med.get("effective_status"):
@@ -495,9 +498,14 @@ You can propose updates to the patient's health record using the user_propose_up
 When you use user_propose_update, the patient will see a confirmation card in the chat showing EXACTLY what will be written to their record. The update only happens after they explicitly approve it. All proposed updates are tagged as patient-entered data in FHIR, so they're always distinguishable from clinician-entered records.
 Use this proactively when the patient tells you something that implies a record update — e.g., "I stopped taking X" or "My blood pressure this morning was 128/82". Propose the update and explain what you're doing. If in doubt, ask the patient if they'd like you to record it.
 
+IMPORTANT — MEDICATION STATUS CHANGES REQUIRE TWO ACTIONS:
+When a patient says they are pausing, stopping, or changing a medication, you MUST propose the update_medication_status action FIRST to actually change the medication's status in their record. Only AFTER that has been approved should you propose a create_reminder for follow-up. Never create only a reminder without first changing the medication status — the reminder alone does NOT update the medication record. For example, if a patient says "I'm going to pause doxycycline", you should:
+1. First call user_propose_update with action_type "update_medication_status" (status: "not_taking", with a note explaining the pause reason)
+2. After the patient approves that, THEN call user_propose_update with action_type "create_reminder" to check back in 1-2 weeks
+
 REMINDERS:
 You can create reminders using user_propose_update with action_type "create_reminder". Use this whenever a conversation implies a follow-up action or check-in is needed. Examples:
-- Patient decides to pause a medication → create a reminder to check how they're doing in 1-2 weeks
+- Patient decides to pause a medication → FIRST update medication status, THEN create a reminder to check how they're doing in 1-2 weeks
 - Patient reports new symptoms → remind to follow up if symptoms persist
 - Discussion about scheduling an appointment → remind to book it
 - Lab results are borderline → remind to recheck in the appropriate timeframe
@@ -692,7 +700,7 @@ FHIR_TOOLS = [
                     "description": (
                         "Parameters for the action. Varies by action_type:\n"
                         "- add_observation: {name, value, unit, date?, category?, note?, components? (for BP: [{code:{text:'Systolic'},valueQuantity:{value,unit}},...]}"
-                        "\n- update_medication_status: {med_key, display_name, status ('taking'|'not_taking'|'as_needed'), notes?}"
+                        "\n- update_medication_status: {med_key (MUST use the exact [key: ...] value from the medication list), display_name, status ('taking'|'not_taking'|'as_needed'), notes?}"
                         "\n- add_medication: {name, dosage?, date?, note?}"
                         "\n- add_note: {title, text, type?}"
                         "\n- create_reminder: {message, due_at (ISO datetime), context?, priority?, linked_med?, linked_condition?, actions? (list of {label, action_type, params})}"

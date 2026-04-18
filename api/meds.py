@@ -638,15 +638,19 @@ async def set_override(request: Request):
         "user_dosage": "25 mg", "user_frequency": "once daily" }
     """
     body = await request.json()
-    med_key = body.get("med_key", "").strip()
+    raw_key = body.get("med_key", "").strip()
     display_name = body.get("display_name", "").strip()
     status = body.get("status", "").strip()
     notes = body.get("notes", "").strip()
     user_dosage = body.get("user_dosage", "").strip()
     user_frequency = body.get("user_frequency", "").strip()
 
-    if not med_key:
+    if not raw_key:
         return {"error": "med_key is required"}
+
+    # Normalize so assistant-provided keys match the grouping logic
+    aliases = await get_aliases()
+    med_key = resolve_key(normalize_med_name(raw_key), aliases)
 
     # If only dosage/frequency are being updated (no status change), keep existing status
     if not status or status not in ("taking", "not_taking", "as_needed"):
