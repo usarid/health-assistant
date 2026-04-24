@@ -24,7 +24,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hapi"]
       interval: 10s
@@ -54,7 +54,7 @@ services:
     volumes:
       - osdata:/usr/share/opensearch/data
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
       interval: 15s
@@ -80,7 +80,7 @@ services:
     volumes:
       - ./hapi-config/application.yaml:/app/config/application.yaml:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "java", "/app/healthcheck.java"]
       interval: 30s
@@ -108,7 +108,7 @@ services:
       OLLAMA_MODEL: "${OLLAMA_MODEL:-mistral}"
       EPIC_CLIENT_ID: "${EPIC_CLIENT_ID:-}"
       EPIC_CLIENT_SECRET: "${EPIC_CLIENT_SECRET:-}"
-      EPIC_REDIRECT_URI: "${EPIC_REDIRECT_URI:-https://localhost:3000/callback}"
+      EPIC_REDIRECT_URI: "${EPIC_REDIRECT_URI:-https://bina.saridium.com/callback}"
     volumes:
       - aidata:/data
     healthcheck:
@@ -129,7 +129,8 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "3000:443"
+      - "127.0.0.1:3000:443"    # Local HTTPS access
+      - "127.0.0.1:3080:80"    # HTTP for Cloudflare Tunnel
     volumes:
       - ./web:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
