@@ -3,19 +3,19 @@
 #
 # Setup:
 #   brew install cloudflared
-#   cloudflared tunnel login
-#   cloudflared tunnel create bina-health
+#   cloudflared tunnel login                       # authorize the binahealth.com zone
+#   cloudflared tunnel create binahealth
 #   cp cloudflared/config.yml.example ~/.cloudflared/config.yml
 #   # Edit the tunnel ID and credentials-file path below
-#   cloudflared tunnel route dns bina-health bina.saridium.com
-#   cloudflared service install
-#   sudo launchctl start com.cloudflare.cloudflared
+#   cloudflared tunnel route dns binahealth binahealth.com
+#   sudo cloudflared service install
+#   sudo launchctl bootstrap system /Library/LaunchDaemons/com.cloudflare.cloudflared.plist
 
 tunnel: TUNNEL_ID_HERE
 credentials-file: /Users/YOUR_USERNAME/.cloudflared/TUNNEL_ID_HERE.json
 
 ingress:
-  - hostname: bina.saridium.com
+  - hostname: binahealth.com
     service: http://localhost:3080
     originRequest:
       noTLSVerify: false
