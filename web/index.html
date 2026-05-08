@@ -18,6 +18,8 @@
   nav h1 img { height: 32px; width: 32px; object-fit: contain; }
   nav a { font-size: 14px; color: #555; text-decoration: none; padding: 6px 12px; border-radius: 6px; }
   nav a.active, nav a:hover { background: #f0f0f0; color: #111; }
+  nav .nav-logout { margin-left: auto; font-size: 12px; color: #888; padding: 4px 10px; }
+  nav .nav-logout:hover { background: #fee; color: #b91c1c; }
 
   .page { display: none; padding: 24px; max-width: 1400px; margin: 0 auto; }
   .page.active { display: block; }
@@ -642,6 +644,7 @@
   <a href="#" data-page="profile">Me</a>
   <a href="#" data-page="timeline">Timeline</a>
   <a href="#" data-page="search">Search</a>
+  <a href="/cdn-cgi/access/logout" class="nav-logout" title="Sign out of Cloudflare Access">Sign out</a>
 </nav>
 <div class="status-bar" id="status-bar">
   <span class="status-item"><span class="status-dot gray" id="dot-hapi"></span> HAPI FHIR: <span id="status-hapi">checking...</span></span>
@@ -977,12 +980,31 @@ function esc(s) { const d = document.createElement('div'); d.textContent = s || 
 // ═══════════════════════════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════════════════════════
-document.querySelectorAll('nav a').forEach(link => {
+document.querySelectorAll('nav a[data-page]').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();
     showPage(link.dataset.page);
   });
 });
+
+// Sign-out: clear the Cloudflare Access session cookie via a same-origin
+// fetch (the response Set-Cookie expires CF_Authorization), then show a
+// Bina-branded goodbye view instead of the default CF logout page.
+const signOutLink = document.querySelector('.nav-logout');
+if (signOutLink) {
+  signOutLink.addEventListener('click', async e => {
+    e.preventDefault();
+    try { await fetch('/cdn-cgi/access/logout', { credentials: 'same-origin' }); } catch (_) {}
+    document.body.innerHTML = `
+      <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#222;">
+        <div style="text-align:center;padding:40px;">
+          <img src="/logo/bina-icon.svg" alt="" style="height:72px;width:72px;margin:0 auto 20px;display:block;">
+          <h1 style="margin:0 0 8px;font-size:22px;font-weight:600;">You've been signed out.</h1>
+          <p style="margin:0;color:#666;font-size:14px;"><a href="/" style="color:#4889ad;text-decoration:none;">Sign back in</a></p>
+        </div>
+      </div>`;
+  });
+}
 
 function showPage(page) {
   const target = document.getElementById('page-' + page);
