@@ -111,6 +111,7 @@ services:
       EPIC_REDIRECT_URI: "${EPIC_REDIRECT_URI:-https://binahealth.com/callback}"
     volumes:
       - aidata:/data
+      - ./data/pillbox:/pillbox:ro            # Read-only Pillbox SQLite DB for pill-image lookups
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; r=httpx.get('http://localhost:8000/api/health'); exit(0 if r.status_code==200 else 1)\""]
       interval: 15s
@@ -129,12 +130,14 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "127.0.0.1:3000:443"    # Local HTTPS access
-      - "127.0.0.1:3080:80"    # HTTP for Cloudflare Tunnel
+      - "127.0.0.1:3000:443"    # Loopback HTTPS (https://localhost:3000)
+      - "127.0.0.1:3080:80"     # HTTP for Cloudflare Tunnel (cloudflared -> localhost:3080)
+      - "443:443"               # LAN HTTPS (https://bina.saridium.com from any device on home wifi)
     volumes:
       - ./web:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
+      - ./data/pillbox/images:/usr/share/pillbox-images:ro    # Pillbox pill photos served at /pillbox-images/
 
 volumes:
   pgdata:

@@ -176,7 +176,37 @@
   .error { background: #fee; border: 1px solid #fcc; border-radius: 8px; padding: 12px 16px; color: #c33; margin-bottom: 16px; }
 
   /* ── Status bar ── */
-  .status-bar { display: flex; align-items: center; gap: 16px; padding: 6px 24px; font-size: 11px; color: #888; background: #fafafa; border-bottom: 1px solid #eee; }
+  .status-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 24px; font-size: 11px; color: #888;
+    background: #fafafa; border-bottom: 1px solid #eee;
+    cursor: pointer; user-select: none;
+    flex-wrap: wrap;     /* lets details panel drop below summary */
+  }
+  .status-bar:hover { background: #f5f5f5; }
+  .status-summary { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .status-chevron { color: #aaa; font-size: 10px; transition: transform 0.15s; margin-left: auto; }
+  .status-bar.expanded .status-chevron { transform: rotate(180deg); }
+  /* Details panel: hidden by default; when expanded, takes full width on its own row */
+  .status-details { display: none; }
+  .status-bar.expanded .status-details {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 4px;
+    padding: 6px 0 2px;
+    margin-top: 4px;
+    border-top: 1px solid #eee;
+  }
+  .status-details .status-item {
+    padding: 2px 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #777;
+  }
+  /* Don't shrink the dot; let the wrapped text indent past it */
+  .status-details .status-item .status-dot { flex-shrink: 0; vertical-align: middle; }
+
   .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; }
   .status-dot.green { background: #27ae60; }
   .status-dot.yellow { background: #f39c12; }
@@ -304,14 +334,21 @@
   .ast-sidebar-header h3 { font-size: 13px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
   .ast-new-btn { padding: 5px 12px; background: #16a085; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 500; }
   .ast-new-btn:hover { background: #138d75; }
+  /* Gear (Preferences) button — bigger glyph so it reads as an icon, not text */
+  .ast-new-btn[title="Preferences"] { font-size: 20px; padding: 2px 10px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; min-width: 36px; }
   .ast-thread-list { flex: 1; overflow-y: auto; padding: 8px 0; }
   .ast-thread { padding: 10px 16px; cursor: pointer; border-bottom: 1px solid #f5f5f5; font-size: 13px; color: #444; transition: background 0.1s; }
-  .ast-thread:hover { background: #f8f9fa; }
+  /* Scope hover effects to real-mouse devices so they don't "stick" on tap */
+  @media (hover: hover) {
+    .ast-thread:hover { background: #f8f9fa; }
+    .ast-thread:hover .ast-thread-actions { opacity: 1; }
+  }
   .ast-thread.active { background: #eef5fb; color: #2471a3; font-weight: 500; border-left: 3px solid #2471a3; }
   .ast-thread-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ast-thread-date { font-size: 10px; color: #aaa; margin-top: 2px; }
   .ast-thread-actions { float: right; opacity: 0; transition: opacity 0.15s; }
-  .ast-thread:hover .ast-thread-actions { opacity: 1; }
+  /* On touch devices, always show the actions (no hover to reveal them) */
+  @media (hover: none) { .ast-thread-actions { opacity: 0.5; } }
   .ast-thread-actions button { background: none; border: none; color: #ccc; cursor: pointer; font-size: 13px; padding: 0 2px; }
   .ast-thread-actions button:hover { color: #e74c3c; }
 
@@ -631,6 +668,470 @@
   .appt-note-loading { font-size: 12px; color: #999; font-style: italic; padding: 8px 0; }
   .appt-note-error { font-size: 12px; color: #e74c3c; padding: 8px 0; }
   .appt-note-count { font-size: 11px; color: #999; margin-left: 4px; }
+
+  /* ═══════════════ Pill identification modal ═══════════════
+     Shows official pill images from DailyMed (NIH) for a medication.
+     Triggered by .med-pill-btn on each med card. Mobile: full-screen. */
+  .med-pill-btn {
+    background: #f5f7fa;
+    border: 1px solid #e0e6ed;
+    color: #4889ad;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .med-pill-btn:hover { background: #eef5fb; border-color: #b8d4e6; }
+  .med-pill-btn::before {
+    content: "";
+    display: inline-block;
+    width: 14px; height: 14px;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath stroke='%234889ad' d='m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z'/%3E%3Cpath stroke='%237ab44f' stroke-width='2.5' d='m8.5 8.5 7 7'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+  }
+
+  .pill-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .pill-modal-card {
+    background: white;
+    border-radius: 12px;
+    max-width: 680px;
+    width: 100%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+  }
+  .pill-modal-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .pill-modal-header h3 { font-size: 16px; font-weight: 600; color: #1a1a2e; margin: 0; }
+  .pill-modal-close {
+    font-size: 28px; line-height: 1;
+    background: none; border: none; color: #888;
+    cursor: pointer; padding: 0 4px;
+  }
+  .pill-modal-close:hover { color: #333; }
+  .pill-modal-body {
+    padding: 14px 18px 18px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .pill-loading, .pill-empty {
+    text-align: center; padding: 40px 20px; color: #888; font-size: 14px;
+  }
+  .pill-empty small { display: block; margin-top: 8px; color: #aaa; font-size: 12px; }
+  .pill-result { padding: 14px 0; border-bottom: 1px solid #f0f0f0; }
+  .pill-result:last-child { border-bottom: none; }
+  .pill-result-grid {
+    display: grid;
+    grid-template-columns: 140px 1fr;
+    gap: 14px;
+    align-items: start;
+  }
+  .pill-result-image img {
+    width: 140px;
+    height: 140px;
+    object-fit: contain;
+    background: #fafafa;
+    border-radius: 8px;
+    border: 1px solid #eee;
+    cursor: zoom-in;
+    display: block;
+  }
+  .pill-img-missing {
+    width: 140px; height: 140px;
+    background: #fafafa;
+    border-radius: 8px;
+    border: 1px dashed #ddd;
+    display: flex; align-items: center; justify-content: center;
+    color: #bbb;
+    font-size: 12px;
+  }
+  .pill-result-info { min-width: 0; }
+  .pill-result-title {
+    font-size: 14px; font-weight: 600; color: #1a1a2e;
+    margin-bottom: 8px;
+  }
+  .pill-meta-row {
+    display: grid;
+    grid-template-columns: 110px 1fr;   /* fixed label column, value flows */
+    column-gap: 10px;
+    font-size: 12px;
+    color: #333;
+    margin: 4px 0;
+    line-height: 1.45;
+    align-items: baseline;
+  }
+  .pill-meta-label {
+    color: #999;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    font-weight: 600;
+  }
+  .pill-meta-row > .pill-meta-value { min-width: 0; word-wrap: break-word; }
+  .pill-meta-row code {
+    background: #f5f7fa;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 12px;
+    color: #2c3e50;
+  }
+  .pill-dea {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 2px 8px;
+    background: #fef5e7;
+    color: #b9770e;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pill-source {
+    text-align: center; font-size: 11px; color: #aaa;
+    padding: 12px 0 0; margin-top: 4px; border-top: 1px solid #f5f5f5;
+  }
+  .pill-source a { color: #888; }
+
+  /* Mobile: full-screen modal, image stacks above metadata */
+  @media (max-width: 768px) {
+    .pill-modal { padding: 0; align-items: stretch; }
+    .pill-modal-card { max-width: 100%; max-height: 100%; border-radius: 0; }
+    .pill-modal-header { padding: 12px 14px; }
+    .pill-modal-body { padding: 12px 14px; }
+    .pill-result-grid {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .pill-result-image img,
+    .pill-img-missing {
+      width: 100%;
+      height: 200px;
+    }
+    /* Stack label above value on mobile so labels never collide with content */
+    .pill-meta-row {
+      grid-template-columns: 1fr;
+      row-gap: 0;
+      margin: 8px 0;
+    }
+    .pill-meta-label { font-size: 10px; margin-bottom: 1px; }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     MOBILE OVERRIDES (viewport ≤ 768px)
+     Single block at end of <style> — desktop styles above remain intact.
+     Pain-point coverage: bottom-nav tabs, mobile assistant chat, card-style
+     data rows, larger tap targets and fonts, iOS safe-area, no-zoom inputs.
+     ═══════════════════════════════════════════════════════════════════════ */
+  @media (max-width: 768px) {
+    /* ── Body / layout: pad for fixed top brand bar AND fixed bottom tab nav ── */
+    body {
+      padding-top: 44px;
+      padding-bottom: calc(64px + env(safe-area-inset-bottom));
+    }
+
+    /* ── Tab nav fixed at the bottom (brand stays at top, see below) ── */
+    nav {
+      position: fixed; bottom: 0; left: 0; right: 0; top: auto;
+      padding: 0 0 env(safe-area-inset-bottom) 0;
+      gap: 0;
+      border-top: 1px solid #e5e7eb;
+      border-bottom: none;
+      box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
+      z-index: 100;
+    }
+
+    /* ── Brand bar pinned to the top of the viewport (escapes the nav's fixed
+       bottom positioning thanks to its own position:fixed). ── */
+    nav h1 {
+      display: flex;
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 44px;
+      margin: 0;
+      padding: 0 14px;
+      background: white;
+      border-bottom: 1px solid #e5e7eb;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      z-index: 100;
+    }
+    nav h1 img { height: 28px; width: 28px; }
+
+    /* Logout escapes the bottom tab bar — pinned in the top brand bar. */
+    nav .nav-logout {
+      position: fixed; top: 10px; right: 12px;
+      z-index: 101;
+      flex: none; min-height: 0;
+      flex-direction: row;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    nav .nav-logout::before, nav .nav-logout::after { display: none !important; content: none !important; }
+
+    /* Each tab becomes a thumb-reachable column with icon + label.
+       Two-color scheme: all ICON SHAPES the same logo blue, all LABEL TEXTS
+       the same gray. Active state amplifies both + adds a top indicator bar. */
+    nav a {
+      flex: 1 1 0;
+      position: relative;     /* for the active-indicator bar */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      padding: 8px 4px 6px 4px;
+      font-size: 10px;
+      font-weight: 500;
+      color: #777;            /* label color (inactive) */
+      border-radius: 0;
+      line-height: 1.2;
+      min-height: 56px;
+      transition: color 0.15s, font-weight 0.15s;
+    }
+    /* Two-color icons (blue + green from the Bina logo) — full color always.
+       Saturation comes from opacity: 50% inactive, 100% active. */
+    nav a::before {
+      background-color: transparent;       /* override the previous mask color */
+      background-image: var(--icon);
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: contain;
+      -webkit-mask: none;                  /* don't apply masks now that the SVG carries color */
+              mask: none;
+      opacity: 0.5;                        /* 50% saturation when inactive */
+      transition: opacity 0.2s;
+    }
+
+    /* Active: full-saturation icon, blue label, bolder, colored bar at top */
+    nav a.active {
+      color: #4889ad;
+      font-weight: 700;
+      background: transparent;
+    }
+    nav a.active::before { opacity: 1; }
+    nav a.active::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 28%;
+      right: 28%;
+      height: 3px;
+      background: #4889ad;
+      border-radius: 0 0 3px 3px;
+    }
+    /* Modern line icons (Lucide style — clean strokes, rounded joins).
+       The icon SVG is used as a mask, so its color follows currentColor.
+       That gives us free dark/active state coloring without per-icon work. */
+    nav a::before {
+      content: "";
+      display: block;
+      width: 24px;
+      height: 24px;
+      background-color: currentColor;
+      -webkit-mask: var(--icon) no-repeat center / contain;
+              mask: var(--icon) no-repeat center / contain;
+      margin-bottom: 2px;
+    }
+    /* Dual-color icons: blue (#4889ad) + green (#7ab44f) per the logo */
+    nav a[data-page="home"]      { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath stroke='%237ab44f' d='M3 9l9-7 9 7'/%3E%3Cpath stroke='%234889ad' d='M5 9v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9'/%3E%3Cpolyline stroke='%234889ad' points='9 22 9 12 15 12 15 22'/%3E%3C/svg%3E"); }
+    nav a[data-page="assistant"] { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath stroke='%234889ad' d='M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z'/%3E%3Ccircle fill='%237ab44f' stroke='none' cx='8' cy='11.5' r='1'/%3E%3Ccircle fill='%237ab44f' stroke='none' cx='12' cy='11.5' r='1'/%3E%3Ccircle fill='%237ab44f' stroke='none' cx='16' cy='11.5' r='1'/%3E%3C/svg%3E"); }
+    nav a[data-page="meds"]      { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath stroke='%234889ad' d='m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z'/%3E%3Cpath stroke='%237ab44f' stroke-width='2.5' d='m8.5 8.5 7 7'/%3E%3C/svg%3E"); }
+    nav a[data-page="profile"]   { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle stroke='%237ab44f' cx='12' cy='7' r='4'/%3E%3Cpath stroke='%234889ad' d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'/%3E%3C/svg%3E"); }
+    nav a[data-page="timeline"]  { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline stroke='%237ab44f' points='22 7 13.5 15.5 8.5 10.5 2 17'/%3E%3Cpolyline stroke='%234889ad' points='16 7 22 7 22 13'/%3E%3C/svg%3E"); }
+    nav a[data-page="search"]    { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle stroke='%234889ad' cx='11' cy='11' r='8'/%3E%3Cline stroke='%237ab44f' x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E"); }
+
+    /* ── Status bar: bar is single-line collapsed by default everywhere now.
+       On mobile, just bump padding for tap target size; expanded layout
+       (column-stacked) is already handled by the main style block. ── */
+    .status-bar { padding: 8px 12px; min-height: 36px; font-size: 12px; }
+
+    /* ── Page padding tighter on mobile ── */
+    .page { padding: 14px 12px; max-width: 100%; }
+
+    /* ── Profile: tighten further (already collapses at 900px) ── */
+    .profile-header { gap: 12px; margin-bottom: 16px; }
+    .profile-avatar { width: 56px; height: 56px; font-size: 24px; }
+    .profile-identity h2 { font-size: 20px; }
+    .profile-demo-grid { grid-template-columns: 1fr; gap: 4px 0; }
+    .profile-vital-name { font-size: 14px; }
+    .profile-vital-value { font-size: 17px; }
+    .profile-cond-btn { font-size: 12px; padding: 5px 10px; min-height: 32px; }
+
+    /* ── Assistant: keep sidebar HEADER visible (so gear + New are reachable),
+       hide thread list + events + saved-views by default. Settings panel
+       (#ast-prefs-panel) still opens normally inline below the header. ── */
+    .ast-layout {
+      flex-direction: column;
+      gap: 0;
+      min-height: calc(100vh - 64px - env(safe-area-inset-bottom));
+    }
+    /* Sidebar STICKY at the top of the assistant page (just under brand bar)
+       so the toggle is always reachable, never lost when scrolling messages. */
+    .ast-sidebar {
+      width: 100%;
+      max-height: none;
+      min-height: 0;
+      margin: 0 0 8px 0;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      position: sticky;
+      top: 44px;              /* under the fixed brand bar */
+      z-index: 50;
+      background: white;
+    }
+    .ast-sidebar-header { padding: 8px 12px; align-items: center; }
+
+    /* Conversations toggle: a real button look (background, border, padding) so
+       it reads as tappable. Chevron rotates when list is shown. */
+    .ast-sidebar-header h3 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #444;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: #f5f7fa;
+      border: 1px solid #e0e6ed;
+      border-radius: 18px;
+      text-transform: none;
+      letter-spacing: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .ast-sidebar-header h3:active { background: #e8edf3; }
+    .ast-sidebar-header h3::after {
+      content: "▾";
+      font-size: 11px;
+      color: #888;
+      transition: transform 0.2s;
+    }
+    .ast-sidebar.mobile-show .ast-sidebar-header h3 {
+      background: #eef5fb;
+      border-color: #b8d4e6;
+      color: #2471a3;
+    }
+    .ast-sidebar.mobile-show .ast-sidebar-header h3::after { transform: rotate(180deg); color: #2471a3; }
+
+    /* Thread list as an OVERLAY (absolute) when expanded — doesn't push the
+       conversation, just floats over it. Tap a thread to navigate; the JS
+       auto-closes the list so the conversation isn't obscured afterwards. */
+    .ast-thread-list { display: none; }
+    .ast-sidebar.mobile-show .ast-thread-list {
+      display: block;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      max-height: 60vh;
+      overflow-y: auto;
+      background: white;
+      border: 1px solid #e0e6ed;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 8px 16px rgba(0,0,0,0.08);
+      z-index: 60;
+    }
+    /* Bigger gear on mobile = easier tap target */
+    .ast-new-btn[title="Preferences"] { font-size: 24px; min-width: 40px; min-height: 40px; padding: 4px 12px; }
+    .ast-new-btn { min-height: 36px; }
+
+    .ast-main {
+      margin-left: 0;
+      max-height: none;
+      /* No explicit height; .ast-messages gets padding-bottom for the fixed composer */
+    }
+    .ast-messages {
+      /* Bottom padding clears the fixed composer (≈ 56px tall) sitting above
+         the bottom tab nav (56px) plus the iOS safe area. */
+      padding: 12px 4px calc(120px + env(safe-area-inset-bottom)) 4px;
+    }
+    .ast-msg { max-width: 92%; font-size: 14px; }
+    /* Hide the disclaimer on mobile — it can be re-surfaced as a one-time onboarding tip */
+    .ast-disclaimer { display: none; }
+    .ast-chat-toolbar { display: none; }
+    /* Composer fixed flush against the top of the bottom tab nav.
+       Bottom value matches the nav's min-height (56px) so there's no gap
+       through which scrolling messages would show.
+       Always visible regardless of scroll position. */
+    .ast-input-area {
+      position: fixed;
+      left: 0; right: 0;
+      bottom: calc(56px + env(safe-area-inset-bottom));
+      background: white;
+      border-top: 1px solid #eee;
+      padding: 8px 10px;
+      z-index: 50;
+      box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
+    }
+    .ast-input-row textarea {
+      font-size: 16px;        /* prevents iOS Safari auto-zoom on focus */
+    }
+    .ast-send-btn { min-height: 40px; padding: 0 14px; }
+
+    /* ── Search page: stack the bar vertically; full-width input ── */
+    .search-bar { flex-direction: column; gap: 8px; }
+    .search-bar input { width: 100%; font-size: 16px; }
+    .search-bar select { width: 100%; font-size: 15px; min-height: 44px; }
+    .search-bar button { width: 100%; min-height: 44px; font-size: 15px; }
+
+    /* ── Timeline page: sidebar above the chart, both full width.
+       Sidebar capped in height with internal scroll so chart stays reachable. ── */
+    .tl-layout { flex-direction: column; gap: 12px; min-height: 0; }
+    .tl-sidebar {
+      width: 100%;
+      max-height: 35vh;
+      max-width: 100%;
+    }
+    .tl-main { margin-left: 0; width: 100%; }
+    .tl-controls { flex-wrap: wrap; gap: 8px; }
+    .tl-quick-ranges { flex-wrap: wrap; }
+    .tl-quick-ranges button { min-height: 36px; padding: 6px 10px; font-size: 13px; }
+    .tl-event-form { flex-direction: column; }
+    .tl-event-form input,
+    .tl-event-form select,
+    .tl-event-form button { width: 100%; font-size: 15px; min-height: 38px; }
+    .tl-metric { padding: 6px 0; font-size: 14px; min-height: 28px; }
+    .tl-cat-header { padding: 12px 16px; font-size: 14px; }
+
+    /* ── Meds: bigger tap targets + wrappable filter row ── */
+    .meds-header h2 { font-size: 18px; }
+    .meds-add-btn { padding: 10px 16px; font-size: 14px; min-height: 40px; }
+    .meds-filters { flex-wrap: wrap; gap: 6px; }
+    .meds-filter { padding: 8px 14px; font-size: 13px; min-height: 36px; }
+
+    /* ── Toast positioned above the bottom nav ── */
+    .meds-toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
+
+    /* ── Generic large-tap-target rule for inline action buttons ── */
+    button { min-height: 36px; }
+  }
 </style>
 </head>
 <body>
@@ -646,11 +1147,17 @@
   <a href="#" data-page="search">Search</a>
   <a href="/cdn-cgi/access/logout" class="nav-logout" title="Sign out of Cloudflare Access">Sign out</a>
 </nav>
-<div class="status-bar" id="status-bar">
-  <span class="status-item"><span class="status-dot gray" id="dot-hapi"></span> HAPI FHIR: <span id="status-hapi">checking...</span></span>
-  <span class="status-item"><span class="status-dot gray" id="dot-search"></span> Full-text search: <span id="status-search">checking...</span></span>
-  <span class="status-item"><span class="status-dot gray" id="dot-data"></span> Resources: <span id="status-data">checking...</span></span>
-  <span id="status-issues" style="margin-left: auto;"></span>
+<div class="status-bar" id="status-bar" onclick="toggleStatusBar(event)" title="Click for system status details">
+  <span class="status-summary">
+    <span class="status-dot gray" id="dot-overall"></span>
+    <span id="status-issues">checking...</span>
+  </span>
+  <span class="status-chevron">▾</span>
+  <div class="status-details">
+    <span class="status-item"><span class="status-dot gray" id="dot-hapi"></span> HAPI FHIR: <span id="status-hapi">checking...</span></span>
+    <span class="status-item"><span class="status-dot gray" id="dot-search"></span> Full-text search: <span id="status-search">checking...</span></span>
+    <span class="status-item"><span class="status-dot gray" id="dot-data"></span> Resources: <span id="status-data">checking...</span></span>
+  </div>
 </div>
 
 <!-- ═══════════════ HOME PAGE ═══════════════ -->
@@ -795,7 +1302,7 @@
   <div class="ast-layout">
     <aside class="ast-sidebar">
       <div class="ast-sidebar-header">
-        <h3>Conversations</h3>
+        <h3 onclick="astToggleThreads(event)" title="Show / hide conversations">Conversations</h3>
         <div style="display:flex;gap:6px;">
           <button class="ast-new-btn" onclick="astNewThread()">+ New</button>
           <button class="ast-new-btn" style="background:#7f8c8d;" onclick="astTogglePrefs()" title="Preferences">&#9881;</button>
@@ -929,6 +1436,19 @@
   <!-- Medication list -->
   <div id="meds-list" class="meds-list">
     <div class="meds-loading">Loading medications...</div>
+  </div>
+</div>
+
+<!-- Pill identification modal (DailyMed-sourced images) -->
+<div id="pill-modal" class="pill-modal" style="display:none;" onclick="medsClosePillModal(event)">
+  <div class="pill-modal-card" onclick="event.stopPropagation()">
+    <div class="pill-modal-header">
+      <h3 id="pill-modal-title">Pill identification</h3>
+      <button class="pill-modal-close" onclick="medsClosePillModal()" aria-label="Close">&times;</button>
+    </div>
+    <div class="pill-modal-body" id="pill-modal-body">
+      <div class="pill-loading">Loading pill images from DailyMed (NIH)...</div>
+    </div>
   </div>
 </div>
 
@@ -2806,13 +3326,16 @@ async function checkHealth() {
       } catch (e) {}
     }
     dotData.className = total > 0 ? 'status-dot green' : 'status-dot red';
-    statusData.textContent = total.toLocaleString() + ' (Tests: ' + (counts.Observation || 0).toLocaleString() +
-      ', Panels: ' + (counts.DiagnosticReport || 0).toLocaleString() +
-      ', Rx: ' + (counts.MedicationRequest || 0).toLocaleString() +
-      ', Conditions: ' + (counts.Condition || 0).toLocaleString() +
-      ', Docs: ' + (counts.DocumentReference || 0).toLocaleString() +
-      ', Messages: ' + (counts.Communication || 0).toLocaleString() +
-      ', Visits: ' + (counts.Encounter || 0).toLocaleString() + ')';
+    // Concise total in the visible label; full breakdown in the tooltip
+    statusData.textContent = total.toLocaleString() + ' records';
+    const breakdown = 'Tests: ' + (counts.Observation || 0).toLocaleString() +
+      '\nPanels: ' + (counts.DiagnosticReport || 0).toLocaleString() +
+      '\nRx: ' + (counts.MedicationRequest || 0).toLocaleString() +
+      '\nConditions: ' + (counts.Condition || 0).toLocaleString() +
+      '\nDocs: ' + (counts.DocumentReference || 0).toLocaleString() +
+      '\nMessages: ' + (counts.Communication || 0).toLocaleString() +
+      '\nVisits: ' + (counts.Encounter || 0).toLocaleString();
+    statusData.title = breakdown;
     if (total === 0) {
       statusData.className = 'status-issue';
       issues.push('No resources found in database');
@@ -2824,13 +3347,41 @@ async function checkHealth() {
   }
 
   const issuesEl = document.getElementById('status-issues');
+  const overall = document.getElementById('dot-overall');
+  // Aggregate dot color = worst of the three sub-dots
+  const colors = ['dot-hapi', 'dot-search', 'dot-data'].map(id => {
+    const cls = document.getElementById(id)?.className || '';
+    if (cls.includes('red')) return 'red';
+    if (cls.includes('yellow')) return 'yellow';
+    if (cls.includes('green')) return 'green';
+    return 'gray';
+  });
+  let aggregate = 'green';
+  if (colors.includes('red')) aggregate = 'red';
+  else if (colors.includes('yellow')) aggregate = 'yellow';
+  else if (colors.includes('gray')) aggregate = 'gray';
+  if (overall) overall.className = 'status-dot ' + aggregate;
+
   if (issues.length) {
     issuesEl.innerHTML = '<span class="status-issue">' + issues.length + ' issue' + (issues.length > 1 ? 's' : '') + '</span>';
     issuesEl.title = issues.join('\n');
-    issuesEl.style.cursor = 'help';
   } else {
     issuesEl.innerHTML = '<span style="color:#27ae60;">All systems healthy</span>';
   }
+}
+
+// Toggle the status bar's expanded state (collapsed by default; show details on click)
+function toggleStatusBar(e) {
+  if (e.target.closest('a, button')) return;  // don't toggle when interacting with links/buttons
+  document.getElementById('status-bar').classList.toggle('expanded');
+}
+
+// Toggle the assistant threads list on mobile (header click). Hidden by default
+// on small screens to keep the chat full-bleed; user opens it to switch threads.
+function astToggleThreads(e) {
+  if (e && e.target && e.target.closest('button')) return;  // don't toggle when clicking + New / gear
+  const sidebar = document.querySelector('#page-assistant .ast-sidebar');
+  if (sidebar) sidebar.classList.toggle('mobile-show');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3151,6 +3702,8 @@ async function astSelectThread(threadId) {
   document.querySelectorAll('.ast-thread').forEach(el => {
     el.classList.toggle('active', el.onclick.toString().includes(threadId));
   });
+  // Auto-close the mobile thread list overlay so the conversation is unobstructed
+  document.querySelectorAll('.ast-sidebar.mobile-show').forEach(el => el.classList.remove('mobile-show'));
   // Load messages
   try {
     const resp = await fetch(`/api/assistant/thread/${threadId}`);
@@ -4470,6 +5023,11 @@ function medsRenderCard(med, compact) {
     return unique.length ? '<div class="med-card-aka">Also known as: <strong>' + escHtml(unique.join(', ')) + '</strong></div>' : '';
   })();
 
+  // Pill identification button — only for actual pill forms, not shampoos / creams / drops / sprays / injections / liquids.
+  // We look for explicit pill-form keywords in the display; if none present, hide the button.
+  const isPillForm = /\b(tablet|capsule|caplet|chewable|softgel|gel\s?cap|gelcap|sublingual|orally\s?disintegrating|odt|extended[- ]release|er\s+tab|cr\s+tab|sr\s+tab|lozenge|troche)s?\b/i.test(med.display || '');
+  const pillIdBtn = (!compact && isPillForm) ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.display)}')" title="See what this pill looks like">Identify pill</button>` : '';
+
   return `<div class="med-card ${compact ? 'med-card-compact' : ''}" data-status="${escAttr(med.effective_status)}" data-key="${escAttr(med.key)}" data-conflict="${med.has_conflict && !med.user_override}">
     <div class="med-card-top">
       <div class="med-card-status ${escAttr(statusClass)}"></div>
@@ -4480,11 +5038,81 @@ function medsRenderCard(med, compact) {
         ${dosFreqHtml}
         ${rawDosageText}
         ${badges}
+        ${pillIdBtn}
         ${historyHtml}
       </div>
       ${actions ? `<div class="med-card-actions">${actions}</div>` : ''}
     </div>
   </div>`;
+}
+
+// Pill identification: fetch from local Pillbox database, show structured results
+async function medsShowPillImage(displayName) {
+  const modal = document.getElementById('pill-modal');
+  const titleEl = document.getElementById('pill-modal-title');
+  const body = document.getElementById('pill-modal-body');
+
+  titleEl.textContent = `Identify: ${displayName}`;
+  body.innerHTML = '<div class="pill-loading">Looking up pills...</div>';
+  modal.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+
+  try {
+    const resp = await fetch(`/api/meds/pill-image?name=${encodeURIComponent(displayName)}`);
+    const data = await resp.json();
+
+    if (data.error && (!data.results || data.results.length === 0)) {
+      body.innerHTML = `<div class="pill-empty">Could not load: ${escHtml(data.error)}</div>`;
+      return;
+    }
+    if (!data.results || data.results.length === 0) {
+      const term = data.search_term || displayName;
+      body.innerHTML = `<div class="pill-empty">
+        No pill images found for <strong>"${escHtml(displayName)}"</strong>
+        <small>Searched Pillbox archive for "${escHtml(term)}". Common gaps: pre-2020 generics not catalogued, post-2020 new formulations, ointments, injections, compounded meds.</small>
+      </div>`;
+      return;
+    }
+
+    // Each result is a unique physical pill (color + shape + imprint).
+    // Image first, then descriptive metadata, then list of manufacturers.
+    const html = data.results.map(r => {
+      const colorShape = [r.color, r.shape].filter(Boolean).join(' · ').toLowerCase();
+      const mfrs = (r.manufacturers || []).filter(Boolean);
+      const mfrLine = mfrs.length
+        ? `<div class="pill-meta-row"><span class="pill-meta-label">Manufacturer${mfrs.length > 1 ? 's' : ''}</span><span class="pill-meta-value">${escHtml(mfrs.join(' · '))}</span></div>`
+        : '';
+      const dea = r.dea_schedule ? `<div class="pill-meta-row"><span class="pill-meta-label">DEA Schedule</span><span class="pill-meta-value"><span class="pill-dea">${escHtml(r.dea_schedule)}</span></span></div>` : '';
+      const img = r.image_url
+        ? `<img src="${r.image_url}" alt="Pill image" loading="lazy" onclick="window.open(this.src, '_blank')" onerror="this.style.display='none'">`
+        : '<div class="pill-img-missing">no image</div>';
+
+      return `<div class="pill-result">
+        <div class="pill-result-grid">
+          <div class="pill-result-image">${img}</div>
+          <div class="pill-result-info">
+            ${r.strength ? `<div class="pill-result-title">${escHtml(r.strength)}</div>` : ''}
+            ${colorShape ? `<div class="pill-meta-row"><span class="pill-meta-label">Appearance</span><span class="pill-meta-value">${escHtml(colorShape)}</span></div>` : ''}
+            ${r.imprint ? `<div class="pill-meta-row"><span class="pill-meta-label">Imprint</span><span class="pill-meta-value"><code>${escHtml(r.imprint)}</code></span></div>` : ''}
+            ${mfrLine}
+            ${dea}
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+    body.innerHTML = html + `<div class="pill-source">
+      Source: NLM Pillbox archive (frozen 2020) · ${data.total} match${data.total === 1 ? '' : 'es'}
+    </div>`;
+  } catch (e) {
+    body.innerHTML = `<div class="pill-empty">Failed to load: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function medsClosePillModal(e) {
+  // Close on backdrop click or X button (card has its own stopPropagation)
+  document.getElementById('pill-modal').style.display = 'none';
+  document.body.style.overflow = '';
 }
 
 function medsRender() {

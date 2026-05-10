@@ -1021,3 +1021,139 @@ async def add_medication(request: Request):
         import traceback
         print(f"[meds] Failed to add medication: {traceback.format_exc()}", flush=True)
         return {"error": str(e)}
+
+
+# ── Pill Image Lookup (NLM Pillbox archive) ────────────────────────────────
+# We use the locally-hosted NLM Pillbox dataset (frozen August 2020, ~30K
+# US oral-solid prescription drugs with curated photos, color, shape, and
+# imprint code). The DB is built from pillbox_meta.csv via build_pillbox_db.py
+# and mounted read-only into the API container at /pillbox/pillbox.db.
+
+import sqlite3 as _sqlite3
+
+PILLBOX_DB_PATH = os.environ.get("PILLBOX_DB", "/pillbox/pillbox.db")
+_pillbox_conn: Optional[_sqlite3.Connection] = None
+
+
+def get_pillbox_conn() -> Optional[_sqlite3.Connection]:
+    """Lazily open a read-only connection to the Pillbox SQLite database.
+    Returns None if the database file isn't present (feature gracefully disabled)."""
+    global _pillbox_conn
+    if _pillbox_conn is not None:
+        return _pillbox_conn
+    if not os.path.exists(PILLBOX_DB_PATH):
+        logger.warning(f"Pillbox DB not found at {PILLBOX_DB_PATH}")
+        return None
+    _pillbox_conn = _sqlite3.connect(
+        f"file:{PILLBOX_DB_PATH}?mode=ro",
+        uri=True,
+        check_same_thread=False,
+    )
+    _pillbox_conn.row_factory = _sqlite3.Row
+    return _pillbox_conn
+
+
+def _clean_drug_name(name: str) -> str:
+    """Reduce a verbose med display ('doxycycline hyclate 100 mg tablet') to a
+    clean searchable name ('doxycycline'). Strips dosage, salt forms, and form."""
+    s = (name or "").strip().lower()
+    if not s:
+        return ""
+    s = re.sub(r"\b\d+(\.\d+)?\s*(mg|mcg|g|ml|units?|iu|%)\b.*", "", s)
+    s = re.sub(r"\b(tablet|capsule|caplet|injection|cream|ointment|solution|suspension|spray|drops?|patch|film[- ]coated|extended[- ]release|er)\b.*", "", s)
+    s = re.sub(r"\b(hyclate|monohydrate|sodium|potassium|calcium|hcl|hydrochloride|sulfate|sulphate|maleate|tartrate|succinate|fumarate|citrate|acetate|phosphate|mesylate)\b", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    parts = s.split()
+    return " ".join(parts[:2]) if parts else ""
+
+
+@router.get("/pill-image")
+async def get_pill_image(name: str, max_results: int = 30):
+    """Look up pill images for a medication via the local NLM Pillbox database.
+
+    Returns JSON with pill matches grouped by physical appearance (color +
+    shape + imprint), since the same physical pill is sold under many NDCs.
+    Each group includes the manufacturers selling that physical pill.
+    """
+    if not name or len(name.strip()) < 2:
+        return {"name": name, "results": [], "error": "Name too short"}
+
+    conn = get_pillbox_conn()
+    if conn is None:
+        return {
+            "name": name,
+            "results": [],
+            "error": "Pillbox database not available. Run scripts/build_pillbox_db.py first.",
+        }
+
+    search_term = _clean_drug_name(name)
+    if not search_term:
+        return {"name": name, "search_term": "", "results": [], "error": "Could not extract searchable name"}
+
+    primary = search_term.split()[0]
+    like = f"%{primary}%"
+
+    # Prefer exact first-word match on ingredient or brand; fall back to LIKE
+    cur = conn.execute(
+        """
+        SELECT id, ingredient, brand_name, brand_raw, rxnorm_name, rxcui,
+               strength, imprint, shape, color, dosage_form, ndc,
+               manufacturer, image_filename, dea_schedule
+        FROM pills
+        WHERE has_image = 1
+          AND (ingredient_first = ? OR brand_first = ?
+               OR ingredient LIKE ? OR brand_name LIKE ?)
+        ORDER BY
+          CASE WHEN ingredient_first = ? OR brand_first = ? THEN 0 ELSE 1 END,
+          color, shape, imprint
+        LIMIT ?
+        """,
+        (primary, primary, like, like, primary, primary, max_results * 4),
+    )
+    rows = cur.fetchall()
+
+    # Group by physical appearance: same color + shape + imprint = same physical pill
+    grouped: list = []
+    by_key: dict = {}
+    for r in rows:
+        key = (
+            (r["color"] or "").upper().strip(),
+            (r["shape"] or "").upper().strip(),
+            (r["imprint"] or "").upper().strip(),
+        )
+        if key in by_key:
+            g = by_key[key]
+            if r["manufacturer"] and r["manufacturer"] not in g["manufacturers"]:
+                g["manufacturers"].append(r["manufacturer"])
+            if r["ndc"] and r["ndc"] not in g["ndcs"]:
+                g["ndcs"].append(r["ndc"])
+            continue
+
+        # spl_strength sometimes contains all ingredients (active+inactive) separated by ';'
+        # Take just the first segment, which is the active ingredient + dose.
+        raw_strength = (r["strength"] or "").strip()
+        first_strength = raw_strength.split(";")[0].strip().rstrip(",").strip()
+        g = {
+            "imprint": r["imprint"] or "",
+            "color": r["color"] or "",
+            "shape": r["shape"] or "",
+            "strength": first_strength,
+            "rxnorm_name": r["rxnorm_name"] or "",
+            "rxcui": r["rxcui"] or "",
+            "manufacturers": [r["manufacturer"]] if r["manufacturer"] else [],
+            "ndcs": [r["ndc"]] if r["ndc"] else [],
+            "dea_schedule": r["dea_schedule"] or "",
+            "image_url": f"/pillbox-images/{r['image_filename']}.jpg" if r["image_filename"] else "",
+        }
+        by_key[key] = g
+        grouped.append(g)
+        if len(grouped) >= max_results:
+            break
+
+    return {
+        "name": name,
+        "search_term": primary,
+        "results": grouped,
+        "total": len(grouped),
+        "source": "NLM Pillbox archive (2020)",
+    }
