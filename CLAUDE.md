@@ -120,7 +120,7 @@ OLLAMA_BASE           — Local LLM (default: http://host.docker.internal:11434)
 OLLAMA_MODEL          — Default: mistral
 EPIC_CLIENT_ID        — Epic OAuth (optional)
 EPIC_CLIENT_SECRET    — Epic OAuth (optional)
-EPIC_REDIRECT_URI     — Default: https://bina.saridium.com/callback
+EPIC_REDIRECT_URI     — Default: https://binahealth.com/callback
 ```
 
 ## Common Operations

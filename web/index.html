@@ -1109,6 +1109,9 @@
       max-height: 35vh;
       max-width: 100%;
     }
+    /* iOS Safari auto-zooms any input with font-size < 16px on focus.
+       Bump the metric filter to 16px on mobile to suppress that. */
+    .tl-sidebar-filter input { font-size: 16px; }
     .tl-main { margin-left: 0; width: 100%; }
     .tl-controls { flex-wrap: wrap; gap: 8px; }
     .tl-quick-ranges { flex-wrap: wrap; }
