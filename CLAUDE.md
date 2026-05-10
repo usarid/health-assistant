@@ -92,6 +92,23 @@ The reschedule button opens a calendar date picker modal (no browser prompt).
 
 Stanford DocumentReferences exist but their Binary content was never ingested (scraping limitation).
 
+### Pill Identification (NLM Pillbox)
+
+The Meds tab has an "Identify pill" button that opens a modal with photos and structured metadata (imprint code, color, shape, manufacturers) for each prescription pill.
+
+**Data source:** locally-hosted NLM Pillbox archive (frozen August 2020, ~9,800 photographed US prescription pills). Files live under `data/pillbox/` (gitignored, ~3 GB extracted). Without this data, the endpoint gracefully returns `{"error": "Pillbox database not available..."}` and the rest of the app works fine.
+
+**Setup on a new machine** (one-time, ~5 min): run `./scripts/setup-pillbox.sh`. This downloads the metadata CSV (80 MB) + image archive (1 GB), extracts, and builds the SQLite DB. After it completes, `docker compose up -d --force-recreate api web` to mount the new data.
+
+**How the lookup works:** `GET /api/meds/pill-image?name={drug}` (in `api/meds.py`) cleans the input name (strips dose/form/salt suffixes), searches the SQLite DB by ingredient or brand name, and groups results by physical appearance (color + shape + imprint) so multiple manufacturers' versions of the same physical pill collapse into one card.
+
+**Docker wiring:**
+- `api` mounts `./data/pillbox` at `/pillbox` (read-only) so it can open `pillbox.db`
+- `web` mounts `./data/pillbox/images` at `/usr/share/pillbox-images` (read-only)
+- nginx serves `/pillbox-images/*.jpg` with long-cache static (config in `nginx.conf`)
+
+**Frontend gating:** the "Identify pill" button is hidden for non-pill forms — see the `isPillForm` regex in `medsRenderCard()` in `web/index.html`. Whitelist: tablet, capsule, caplet, chewable, softgel, sublingual, ODT, lozenge, troche.
+
 ## Environment Variables
 
 ```
@@ -115,8 +132,16 @@ docker compose up -d
 # Rebuild API after code changes
 docker compose up -d --build api && docker compose restart web
 
+# CRITICAL — after editing docker-compose.yml (volumes, ports, env vars),
+# a plain `up -d` will NOT recreate containers if the image hasn't changed.
+# Force recreation so the new config takes effect:
+docker compose up -d --force-recreate api web
+
 # Restart web only (nginx picks up HTML/JS changes)
 docker compose restart web
+
+# One-time: set up the Pillbox archive for the Meds pill-identification feature
+./scripts/setup-pillbox.sh
 
 # Check API logs
 docker compose logs -f api
