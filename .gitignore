@@ -41,3 +41,6 @@ certs/
 # ── Temporary ──
 *.tmp
 *.bak
+
+# Migration backups (large, contain personal data)
+tmp/
