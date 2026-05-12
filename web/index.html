@@ -5667,7 +5667,11 @@ async function loadReminders() {
       html += '<div class="reminder-actions reminder-actions-primary">';
       const actions = r.actions || [];
       for (const a of actions) {
-        html += '<button class="reminder-action-btn primary" onclick="executeReminderAction(' + r.id + ',' + JSON.stringify(JSON.stringify(a)) + ')">' + escapeHtml(a.label) + '</button>';
+        // escapeHtml turns the JSON's inner "s into &quot; so they don't
+        // prematurely terminate the onclick=" attribute (the browser decodes
+        // &quot; → " only when handing the value to the JS engine).
+        const actionAttr = escapeHtml(JSON.stringify(JSON.stringify(a)));
+        html += '<button class="reminder-action-btn primary" onclick="executeReminderAction(' + r.id + ',' + actionAttr + ')">' + escapeHtml(a.label) + '</button>';
       }
       html += '<button class="reminder-action-btn snooze" onclick="snoozeReminder(' + r.id + ')">Snooze 3d</button>';
       html += '</div>';
@@ -5828,28 +5832,62 @@ function rescheduleReminder(id, currentDueAt) {
 
 async function executeReminderAction(reminderId, actionJson) {
   const action = JSON.parse(actionJson);
-  // For now, mark the reminder as completed and execute the action if it's a known type
-  if (action.action_type === 'update_medication_status' && action.params) {
+  // If the action carries an action_type, route it through the same backend
+  // endpoint the assistant uses for proposed-action Approve buttons. It handles
+  // all five supported action_types (add_observation, update_medication_status,
+  // add_medication, add_note, create_reminder) and returns an error for
+  // anything unsupported — so we never silently no-op.
+  //
+  // If the action FAILS, surface it and DO NOT mark the reminder completed —
+  // the user must not be left thinking something happened when nothing did.
+  if (action.action_type) {
+    let result;
     try {
-      await fetch('/api/meds/override', {
-        method: 'PUT',
+      const resp = await fetch('/api/assistant/execute-action', {
+        method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(action.params)
+        body: JSON.stringify({
+          action_type: action.action_type,
+          summary: action.label || '',
+          params: action.params || {},
+        }),
       });
-      // Invalidate meds cache
+      result = await resp.json().catch(() => ({error: 'Invalid response from server'}));
+      if (!resp.ok || result.error) {
+        alert('Could not complete this action:\n\n' + (result.error || resp.statusText || 'Unknown error') +
+              '\n\nThe reminder has been left active so you can try again or pick a different option.');
+        return;
+      }
+    } catch (e) {
+      console.error('Reminder action failed:', e);
+      alert('Could not complete this action:\n\n' + (e.message || e) +
+            '\n\nThe reminder has been left active so you can try again or pick a different option.');
+      return;
+    }
+    // Invalidate meds cache for actions that change med state
+    if (action.action_type === 'update_medication_status' || action.action_type === 'add_medication') {
       medsData = [];
       medsInitialized = false;
-    } catch (e) { console.error('Med action failed:', e); }
+    }
   }
-  // Mark reminder completed
+  // Mark reminder completed (only if the action above succeeded or was a no-op)
   try {
-    await fetch('/api/reminders/' + reminderId, {
+    const resp = await fetch('/api/reminders/' + reminderId, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ status: 'completed' })
     });
+    if (!resp.ok) {
+      const r = await resp.json().catch(() => ({}));
+      alert('The action was recorded, but the reminder could not be marked as done:\n\n' +
+            (r.error || resp.statusText || 'Unknown error'));
+      return;
+    }
     loadReminders();
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error('Reminder completion failed:', e);
+    alert('The action was recorded, but the reminder could not be marked as done:\n\n' + (e.message || e));
+  }
 }
 
 function parseApptFields(appt) {
