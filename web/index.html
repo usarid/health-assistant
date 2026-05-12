@@ -3971,6 +3971,21 @@ async function astSend(opts = {}) {
               '<span class="ast-cursor"></span>';
 
           } else if (data.type === 'proposed_action') {
+            // Close out the matching "Looking up record update..." indicator.
+            // The backend emits proposed_action INSTEAD of tool_result for the
+            // user_propose_update tool, so without this the indicator stays
+            // stuck at active forever even though the proposal already rendered.
+            for (let i = toolIndicators.length - 1; i >= 0; i--) {
+              const ind = toolIndicators[i];
+              if (ind.dataset.tool === 'user_propose_update' && ind.querySelector('.ast-tool-dot.active')) {
+                const dot = ind.querySelector('.ast-tool-dot.active');
+                dot.classList.remove('active');
+                dot.classList.add('done');
+                const labelEl = ind.querySelector('.ast-tool-label');
+                if (labelEl) labelEl.textContent = labelEl.textContent.replace(/^Looking up/, 'Proposed').replace('...', '');
+                break;
+              }
+            }
             // Render a confirmation card for the proposed update
             const actionLabels = {
               add_observation: 'Record Measurement',
