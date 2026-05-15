@@ -89,6 +89,15 @@ async def get_db() -> aiosqlite.Connection:
             await _db.execute("ALTER TABLE med_overrides ADD COLUMN user_dosage TEXT DEFAULT ''")
             await _db.execute("ALTER TABLE med_overrides ADD COLUMN user_frequency TEXT DEFAULT ''")
             await _db.commit()
+        # Migration: add pill-choice columns (chosen-pill picture for the Meds tab picker)
+        try:
+            await _db.execute("SELECT pill_imprint FROM med_overrides LIMIT 0")
+        except Exception:
+            await _db.execute("ALTER TABLE med_overrides ADD COLUMN pill_imprint TEXT DEFAULT ''")
+            await _db.execute("ALTER TABLE med_overrides ADD COLUMN pill_color TEXT DEFAULT ''")
+            await _db.execute("ALTER TABLE med_overrides ADD COLUMN pill_shape TEXT DEFAULT ''")
+            await _db.execute("ALTER TABLE med_overrides ADD COLUMN pill_image_url TEXT DEFAULT ''")
+            await _db.commit()
         await _db.commit()
     return _db
 
@@ -538,6 +547,10 @@ async def _build_medication_list() -> dict:
         user_notes = override["notes"] if override else ""
         user_dosage = override["user_dosage"] if override and override.get("user_dosage") else ""
         user_frequency = override["user_frequency"] if override and override.get("user_frequency") else ""
+        pill_imprint = override["pill_imprint"] if override and override.get("pill_imprint") else ""
+        pill_color = override["pill_color"] if override and override.get("pill_color") else ""
+        pill_shape = override["pill_shape"] if override and override.get("pill_shape") else ""
+        pill_image_url = override["pill_image_url"] if override and override.get("pill_image_url") else ""
 
         # Determine effective display status
         if user_status:
@@ -569,6 +582,10 @@ async def _build_medication_list() -> dict:
             "frequency": frequency,
             "user_dosage": user_dosage,
             "user_frequency": user_frequency,
+            "pill_imprint": pill_imprint,
+            "pill_color": pill_color,
+            "pill_shape": pill_shape,
+            "pill_image_url": pill_image_url,
             "rxnorm_code": rxnorm,
             "patient_reported": patient_reported,
             "record_count": len(records),
@@ -681,6 +698,74 @@ async def set_override(request: Request):
     )
     await db.commit()
     return {"ok": True, "med_key": med_key, "status": status}
+
+
+@router.put("/pill-choice")
+async def set_pill_choice(request: Request):
+    """Persist (or clear) the user's chosen pill picture for a medication.
+
+    Body:
+      { "med_key": "doxycycline",
+        "display_name": "Doxycycline 50 mg capsule",  # used only if creating a new row
+        "imprint": "WC 410",
+        "color": "WHITE",
+        "shape": "CAPSULE",
+        "image_url": "/pillbox-images/abc123.jpg" }
+
+    Pass empty strings for imprint/color/shape/image_url to clear the choice
+    without touching status/notes/dosage.
+    """
+    body = await request.json()
+    raw_key = body.get("med_key", "").strip()
+    if not raw_key:
+        return {"error": "med_key is required"}
+
+    aliases = await get_aliases()
+    med_key = resolve_key(normalize_med_name(raw_key), aliases)
+
+    imprint = body.get("imprint", "").strip()
+    color = body.get("color", "").strip()
+    shape = body.get("shape", "").strip()
+    image_url = body.get("image_url", "").strip()
+    display_name = body.get("display_name", med_key).strip()
+
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Check for existing row — if present, just patch the pill fields; if not,
+    # create one with a default 'taking' status (same convention as set_override
+    # uses when adding dosage info to a med that had no prior override). The
+    # user picking the pill they take is a reasonable signal that they take it.
+    cursor = await db.execute(
+        "SELECT med_key FROM med_overrides WHERE med_key = ?", (med_key,)
+    )
+    row = await cursor.fetchone()
+    if row:
+        await db.execute(
+            """UPDATE med_overrides
+                  SET pill_imprint = ?, pill_color = ?, pill_shape = ?,
+                      pill_image_url = ?, updated_at = ?
+                WHERE med_key = ?""",
+            (imprint, color, shape, image_url, now, med_key),
+        )
+    else:
+        await db.execute(
+            """INSERT INTO med_overrides
+                   (med_key, display_name, status, notes, user_dosage,
+                    user_frequency, pill_imprint, pill_color, pill_shape,
+                    pill_image_url, updated_at)
+               VALUES (?, ?, 'taking', '', '', '', ?, ?, ?, ?, ?)""",
+            (med_key, display_name, imprint, color, shape, image_url, now),
+        )
+    await db.commit()
+    return {
+        "ok": True,
+        "med_key": med_key,
+        "pill_imprint": imprint,
+        "pill_color": color,
+        "pill_shape": shape,
+        "pill_image_url": image_url,
+    }
 
 
 @router.delete("/override")

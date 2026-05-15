@@ -688,6 +688,29 @@
     transition: background 0.15s, border-color 0.15s;
   }
   .med-pill-btn:hover { background: #eef5fb; border-color: #b8d4e6; }
+  /* Thumbnail next to the med name showing the user's chosen pill (if any).
+     Sized large enough to actually read the imprint/color/shape; cropped to
+     center so the centered pill in NLM Pillbox photos fills the box (rather
+     than being a postage stamp surrounded by the photo's gray surface).
+     A small contrast bump helps the pill pop out of its photo background. */
+  .med-pill-thumb {
+    width: 60px; height: 60px;
+    object-fit: cover;
+    object-position: center;
+    background: #fafafa;
+    border: 1px solid #e0e6ed;
+    border-radius: 8px;
+    cursor: pointer;
+    vertical-align: middle;
+    margin-right: 12px;
+    flex-shrink: 0;
+    transition: border-color 0.15s, transform 0.1s;
+    filter: contrast(1.08) saturate(1.1);
+  }
+  .med-pill-thumb:hover { border-color: #4889ad; transform: scale(1.05); }
+  /* Wrap name + thumb in a flex row so the thumb sits inline left of the name. */
+  .med-card-name-row { display: flex; align-items: center; gap: 0; }
+  .med-card-name-row .med-card-name { display: inline; }
   .med-pill-btn::before {
     content: "";
     display: inline-block;
@@ -743,8 +766,59 @@
     text-align: center; padding: 40px 20px; color: #888; font-size: 14px;
   }
   .pill-empty small { display: block; margin-top: 8px; color: #aaa; font-size: 12px; }
-  .pill-result { padding: 14px 0; border-bottom: 1px solid #f0f0f0; }
+  .pill-result { padding: 14px 0; border-bottom: 1px solid #f0f0f0; position: relative; }
   .pill-result:last-child { border-bottom: none; }
+  /* Selectable picker cards: visual affordance + selected state with checkmark. */
+  .pill-result.selectable {
+    cursor: pointer;
+    padding: 14px 12px;
+    margin: 4px -12px;
+    border-bottom: 1px solid #f0f0f0;
+    border-radius: 8px;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+  .pill-result.selectable:hover {
+    background: #f5f9fc;
+    box-shadow: inset 0 0 0 1px #b8d4e6;
+  }
+  .pill-result.selected {
+    background: #eef7f1;
+    box-shadow: inset 0 0 0 2px #7ab44f;
+  }
+  .pill-result.selected::after {
+    content: "✓";
+    position: absolute;
+    top: 10px; right: 12px;
+    width: 26px; height: 26px;
+    background: #7ab44f;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 15px;
+    z-index: 1;
+  }
+  .pill-picker-help {
+    font-size: 12px; color: #888;
+    padding: 0 0 10px;
+    border-bottom: 1px solid #f5f5f5;
+    margin-bottom: 4px;
+  }
+  .pill-picker-actions {
+    display: flex; justify-content: space-between; align-items: center;
+    padding-top: 12px; margin-top: 4px;
+    border-top: 1px solid #f5f5f5;
+  }
+  .pill-picker-clear {
+    background: none; border: none;
+    color: #c0392b; font-size: 12px;
+    cursor: pointer; padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .pill-picker-clear:hover { background: #fdecea; }
+  .pill-picker-clear[disabled] { visibility: hidden; }
   .pill-result-grid {
     display: grid;
     grid-template-columns: 140px 1fr;
@@ -5044,13 +5118,19 @@ function medsRenderCard(med, compact) {
   // Pill identification button — only for actual pill forms, not shampoos / creams / drops / sprays / injections / liquids.
   // We look for explicit pill-form keywords in the display; if none present, hide the button.
   const isPillForm = /\b(tablet|capsule|caplet|chewable|softgel|gel\s?cap|gelcap|sublingual|orally\s?disintegrating|odt|extended[- ]release|er\s+tab|cr\s+tab|sr\s+tab|lozenge|troche)s?\b/i.test(med.display || '');
-  const pillIdBtn = (!compact && isPillForm) ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.display)}')" title="See what this pill looks like">Identify pill</button>` : '';
+  const pillBtnLabel = med.pill_image_url ? 'Change picture…' : 'Choose picture…';
+  const pillIdBtn = (!compact && isPillForm) ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" title="Pick the picture of the pill you're taking">${pillBtnLabel}</button>` : '';
+
+  // Inline thumbnail for the user's chosen pill (clicking it also opens the picker).
+  const pillThumb = (med.pill_image_url && isPillForm)
+    ? `<img class="med-pill-thumb" src="${escAttr(med.pill_image_url)}" alt="Chosen pill" title="${escAttr([med.pill_imprint, med.pill_color, med.pill_shape].filter(Boolean).join(' · ').toLowerCase())}" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" onerror="this.style.display='none'">`
+    : '';
 
   return `<div class="med-card ${compact ? 'med-card-compact' : ''}" data-status="${escAttr(med.effective_status)}" data-key="${escAttr(med.key)}" data-conflict="${med.has_conflict && !med.user_override}">
     <div class="med-card-top">
       <div class="med-card-status ${escAttr(statusClass)}"></div>
       <div class="med-card-info">
-        <div class="med-card-name">${escHtml(med.display)}</div>
+        <div class="med-card-name-row">${pillThumb}<span class="med-card-name">${escHtml(med.display)}</span></div>
         ${akaHtml}
         <div class="med-card-meta">${escHtml(statusLabel)} · Last ordered ${escHtml(med.most_recent_order || 'unknown')}${prescriberHtml}${historyCount}</div>
         ${dosFreqHtml}
@@ -5064,14 +5144,24 @@ function medsRenderCard(med, compact) {
   </div>`;
 }
 
-// Pill identification: fetch from local Pillbox database, show structured results
-async function medsShowPillImage(displayName) {
+// Pill picker: fetch matches from the local Pillbox DB, render them as
+// selectable cards, and let the user pick "the one I'm taking". The currently-
+// chosen pill (if any) is highlighted with a check mark, and a Clear link
+// appears at the bottom so the user can drop the choice without re-picking.
+async function medsShowPillImage(medKey, displayName) {
   const modal = document.getElementById('pill-modal');
   const titleEl = document.getElementById('pill-modal-title');
   const body = document.getElementById('pill-modal-body');
 
-  titleEl.textContent = `Identify: ${displayName}`;
-  body.innerHTML = '<div class="pill-loading">Looking up pills...</div>';
+  // Look up the current choice (if any) so we can highlight it in the picker.
+  const med = (medsData || []).find(m => m.key === medKey) || {};
+  const currentImprint = (med.pill_imprint || '').toUpperCase().trim();
+  const currentColor = (med.pill_color || '').toUpperCase().trim();
+  const currentShape = (med.pill_shape || '').toUpperCase().trim();
+  const hasCurrentChoice = !!(currentImprint || currentColor || currentShape);
+
+  titleEl.textContent = `Choose picture: ${displayName}`;
+  body.innerHTML = '<div class="pill-loading">Looking up pills…</div>';
   modal.style.display = 'flex';
   document.body.style.overflow = 'hidden';
 
@@ -5092,9 +5182,18 @@ async function medsShowPillImage(displayName) {
       return;
     }
 
-    // Each result is a unique physical pill (color + shape + imprint).
-    // Image first, then descriptive metadata, then list of manufacturers.
-    const html = data.results.map(r => {
+    // Stash the data on the modal so the click handler can grab the chosen row
+    // without re-serializing it through onclick attributes (which already bit us
+    // once with the reminder action buttons).
+    modal._pillResults = data.results;
+    modal._pillMedKey = medKey;
+    modal._pillMedDisplay = displayName;
+
+    const help = data.results.length > 1
+      ? `<div class="pill-picker-help">Tap the picture that matches what you're taking.</div>`
+      : '';
+
+    const html = data.results.map((r, idx) => {
       const colorShape = [r.color, r.shape].filter(Boolean).join(' · ').toLowerCase();
       const mfrs = (r.manufacturers || []).filter(Boolean);
       const mfrLine = mfrs.length
@@ -5102,10 +5201,17 @@ async function medsShowPillImage(displayName) {
         : '';
       const dea = r.dea_schedule ? `<div class="pill-meta-row"><span class="pill-meta-label">DEA Schedule</span><span class="pill-meta-value"><span class="pill-dea">${escHtml(r.dea_schedule)}</span></span></div>` : '';
       const img = r.image_url
-        ? `<img src="${r.image_url}" alt="Pill image" loading="lazy" onclick="window.open(this.src, '_blank')" onerror="this.style.display='none'">`
+        ? `<img src="${r.image_url}" alt="Pill image" loading="lazy" onerror="this.style.display='none'">`
         : '<div class="pill-img-missing">no image</div>';
 
-      return `<div class="pill-result">
+      // Compare on (imprint, color, shape) — the same appearance key the backend
+      // uses to group results, so the highlight survives any cosmetic re-sorting.
+      const isSelected = hasCurrentChoice
+        && (r.imprint || '').toUpperCase().trim() === currentImprint
+        && (r.color || '').toUpperCase().trim() === currentColor
+        && (r.shape || '').toUpperCase().trim() === currentShape;
+
+      return `<div class="pill-result selectable${isSelected ? ' selected' : ''}" data-idx="${idx}" onclick="medsSelectPill(this)">
         <div class="pill-result-grid">
           <div class="pill-result-image">${img}</div>
           <div class="pill-result-info">
@@ -5119,12 +5225,89 @@ async function medsShowPillImage(displayName) {
       </div>`;
     }).join('');
 
-    body.innerHTML = html + `<div class="pill-source">
-      Source: NLM Pillbox archive (frozen 2020) · ${data.total} match${data.total === 1 ? '' : 'es'}
-    </div>`;
+    body.innerHTML = help + html + `
+      <div class="pill-picker-actions">
+        <button class="pill-picker-clear" onclick="medsClearPillChoice()" ${hasCurrentChoice ? '' : 'disabled'}>Clear selection</button>
+        <div class="pill-source" style="text-align:right; padding:0; border:none; margin:0;">NLM Pillbox archive · ${data.total} match${data.total === 1 ? '' : 'es'}</div>
+      </div>`;
   } catch (e) {
     body.innerHTML = `<div class="pill-empty">Failed to load: ${escHtml(e.message)}</div>`;
   }
+}
+
+// Click handler for a picker card. Reads the originating result row from the
+// stash on the modal so we don't have to round-trip the whole record through
+// an HTML attribute.
+async function medsSelectPill(cardEl) {
+  const modal = document.getElementById('pill-modal');
+  const idx = parseInt(cardEl.dataset.idx, 10);
+  const r = (modal._pillResults || [])[idx];
+  if (!r) return;
+
+  try {
+    const resp = await fetch('/api/meds/pill-choice', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        med_key: modal._pillMedKey,
+        display_name: modal._pillMedDisplay,
+        imprint: r.imprint || '',
+        color: r.color || '',
+        shape: r.shape || '',
+        image_url: r.image_url || '',
+      }),
+    });
+    const result = await resp.json().catch(() => ({}));
+    if (!resp.ok || result.error) {
+      alert('Could not save your pill selection:\n\n' + (result.error || resp.statusText || 'Unknown error'));
+      return;
+    }
+  } catch (e) {
+    alert('Could not save your pill selection:\n\n' + (e.message || e));
+    return;
+  }
+
+  // Invalidate meds cache so the Meds tab re-renders with the new thumbnail.
+  medsInitialized = false;
+  medsData = [];
+  medsClosePillModal();
+  if (typeof medsLoad === 'function') medsLoad();
+  else if (typeof loadMeds === 'function') loadMeds();
+}
+
+// Clear the chosen pill picture (sends empty values; backend keeps any
+// existing status/dosage overrides intact).
+async function medsClearPillChoice() {
+  const modal = document.getElementById('pill-modal');
+  const medKey = modal._pillMedKey;
+  const displayName = modal._pillMedDisplay;
+  if (!medKey) return;
+
+  try {
+    const resp = await fetch('/api/meds/pill-choice', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        med_key: medKey,
+        display_name: displayName,
+        imprint: '', color: '', shape: '', image_url: '',
+      }),
+    });
+    const result = await resp.json().catch(() => ({}));
+    if (!resp.ok || result.error) {
+      alert('Could not clear your pill selection:\n\n' + (result.error || resp.statusText || 'Unknown error'));
+      return;
+    }
+  } catch (e) {
+    alert('Could not clear your pill selection:\n\n' + (e.message || e));
+    return;
+  }
+
+  medsInitialized = false;
+  medsData = [];
+  medsClosePillModal();
+  if (typeof medsLoad === 'function') medsLoad();
+  else if (typeof loadMeds === 'function') loadMeds();
 }
 
 function medsClosePillModal(e) {
