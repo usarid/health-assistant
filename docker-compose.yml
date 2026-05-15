@@ -98,17 +98,25 @@ services:
     depends_on:
       hapi:
         condition: service_healthy
+    # Load secrets and optional overrides directly from .env. Compose's automatic
+    # `.env` interpolation has proved unreliable on this host (some `up -d`
+    # invocations resolve ${ANTHROPIC_API_KEY:-} to ""), so we name the file
+    # explicitly. NOTE: keys present in BOTH env_file and the environment: block
+    # are overridden by environment:, so we keep ANTHROPIC_API_KEY / EPIC_*
+    # OUT of environment: and let env_file own them. Defaults that we still
+    # want even when .env doesn't define them stay in environment: with the
+    # safer no-interpolation form.
+    env_file:
+      - .env
     environment:
       HAPI_BASE: "http://hapi:8080/fhir"
       PHV_LIB: "/app"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}"
       ASSISTANT_DB: "/data/chat.db"
       OLLAMA_BASE: "http://host.docker.internal:11434"
-      OLLAMA_MODEL: "${OLLAMA_MODEL:-mistral}"
-      EPIC_CLIENT_ID: "${EPIC_CLIENT_ID:-}"
-      EPIC_CLIENT_SECRET: "${EPIC_CLIENT_SECRET:-}"
-      EPIC_REDIRECT_URI: "${EPIC_REDIRECT_URI:-https://binahealth.com/callback}"
+      # Defaults — overridden if .env defines the same key.
+      ANTHROPIC_MODEL: "claude-sonnet-4-20250514"
+      OLLAMA_MODEL: "mistral"
+      EPIC_REDIRECT_URI: "https://binahealth.com/callback"
     volumes:
       - aidata:/data
       - ./data/pillbox:/pillbox:ro            # Read-only Pillbox SQLite DB for pill-image lookups
