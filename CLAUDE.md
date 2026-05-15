@@ -96,18 +96,22 @@ Stanford DocumentReferences exist but their Binary content was never ingested (s
 
 The Meds tab has an "Identify pill" button that opens a modal with photos and structured metadata (imprint code, color, shape, manufacturers) for each prescription pill.
 
-**Data source:** locally-hosted NLM Pillbox archive (frozen August 2020, ~9,800 photographed US prescription pills). Files live under `data/pillbox/` (gitignored, ~3 GB extracted). Without this data, the endpoint gracefully returns `{"error": "Pillbox database not available..."}` and the rest of the app works fine.
+**Data source:** locally-hosted NLM Pillbox archive (frozen August 2020, ~9,800 photographed US prescription pills). Files live under `data/pillbox/` (gitignored, ~3 GB extracted + ~2 GB of background-removed PNGs). Without this data, the endpoint gracefully returns `{"error": "Pillbox database not available..."}` and the rest of the app works fine.
 
-**Setup on a new machine** (one-time, ~5 min): run `./scripts/setup-pillbox.sh`. This downloads the metadata CSV (80 MB) + image archive (1 GB), extracts, and builds the SQLite DB. After it completes, `docker compose up -d --force-recreate api web` to mount the new data.
+**Setup on a new machine** (one-time, ~50 min on M2 Pro): run `./scripts/setup-pillbox.sh`. This downloads the metadata CSV (80 MB) + image archive (1 GB), extracts, builds the SQLite DB, then runs background removal on every image (rembg + u2netp) into `data/pillbox/images_nobg/`. After it completes, `docker compose up -d --force-recreate api web` to mount the new data.
 
-**How the lookup works:** `GET /api/meds/pill-image?name={drug}` (in `api/meds.py`) cleans the input name (strips dose/form/salt suffixes), searches the SQLite DB by ingredient or brand name, and groups results by physical appearance (color + shape + imprint) so multiple manufacturers' versions of the same physical pill collapse into one card.
+**Background-removal pipeline:** `scripts/remove_pillbox_backgrounds.py` walks `data/pillbox/images/*.jpg`, passes each through rembg's `u2netp` model, and writes the cutout as a PNG with alpha to `data/pillbox/images_nobg/`. Idempotent + resumable (skips files whose output already exists), so re-running is cheap. Runs in a venv at `data/pillbox/.venv/` to keep rembg/onnxruntime/Pillow off the system Python. Quality is good for pills on uniform photo backgrounds; if a future case fails, switch to `--model isnet-general-use` (slower, higher quality).
+
+**How the lookup works:** `GET /api/meds/pill-image?name={drug}` (in `api/meds.py`) cleans the input name (strips dose/form/salt suffixes), searches the SQLite DB by ingredient or brand name, and groups results by physical appearance (color + shape + imprint) so multiple manufacturers' versions of the same physical pill collapse into one card. Image URLs point at the no-background PNGs: `/pillbox-images/{filename}.png`.
 
 **Docker wiring:**
 - `api` mounts `./data/pillbox` at `/pillbox` (read-only) so it can open `pillbox.db`
-- `web` mounts `./data/pillbox/images` at `/usr/share/pillbox-images` (read-only)
-- nginx serves `/pillbox-images/*.jpg` with long-cache static (config in `nginx.conf`)
+- `web` mounts `./data/pillbox/images_nobg` at `/usr/share/pillbox-images` (read-only) — note: the no-bg dir, NOT the original `images/` (originals are kept on disk for reprocessing but are not served)
+- nginx serves `/pillbox-images/*.png` with long-cache static (config in `nginx.conf`)
 
-**Frontend gating:** the "Identify pill" button is hidden for non-pill forms — see the `isPillForm` regex in `medsRenderCard()` in `web/index.html`. Whitelist: tablet, capsule, caplet, chewable, softgel, sublingual, ODT, lozenge, troche.
+**Pill picker (per-med chosen photo):** the Meds tab "Choose picture…" button lets the user pick which physical pill they actually take from the gallery of matches. The choice is persisted via `PUT /api/meds/pill-choice` into four extra columns on `med_overrides` (`pill_imprint`, `pill_color`, `pill_shape`, `pill_image_url`), rides along in `GET /api/meds`, and renders as an inline 60px thumbnail on the med card. Re-opening the picker highlights the current selection with a green check + border and shows a "Clear selection" link.
+
+**Frontend gating:** the "Choose picture…" button is hidden for non-pill forms — see the `isPillForm` regex in `medsRenderCard()` in `web/index.html`. Whitelist: tablet, capsule, caplet, chewable, softgel, sublingual, ODT, lozenge, troche.
 
 ## Environment Variables
 

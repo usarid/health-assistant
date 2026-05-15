@@ -1228,7 +1228,9 @@ async def get_pill_image(name: str, max_results: int = 30):
             "manufacturers": [r["manufacturer"]] if r["manufacturer"] else [],
             "ndcs": [r["ndc"]] if r["ndc"] else [],
             "dea_schedule": r["dea_schedule"] or "",
-            "image_url": f"/pillbox-images/{r['image_filename']}.jpg" if r["image_filename"] else "",
+            # Served by nginx from data/pillbox/images_nobg/ (background-removed
+            # PNGs with alpha — see scripts/remove_pillbox_backgrounds.py).
+            "image_url": f"/pillbox-images/{r['image_filename']}.png" if r["image_filename"] else "",
         }
         by_key[key] = g
         grouped.append(g)

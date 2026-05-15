@@ -145,7 +145,7 @@ services:
       - ./web:/usr/share/nginx/html:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs:/etc/nginx/certs:ro
-      - ./data/pillbox/images:/usr/share/pillbox-images:ro    # Pillbox pill photos served at /pillbox-images/
+      - ./data/pillbox/images_nobg:/usr/share/pillbox-images:ro   # Background-removed PNGs served at /pillbox-images/*.png
 
 volumes:
   pgdata:

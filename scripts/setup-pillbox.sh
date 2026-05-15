@@ -55,6 +55,21 @@ echo ""
 echo "Building SQLite database from metadata CSV..."
 python3 "$REPO_DIR/scripts/build_pillbox_db.py"
 
+# 5. Remove the photo background from each image. The frontend serves these
+#    cutouts so the pill renders cleanly against the card background instead
+#    of floating on a gray photo surface. ~50 min on an M2 Pro for ~9k images.
+#    Idempotent: outputs already present are skipped, so re-running is cheap.
+echo ""
+echo "Removing photo backgrounds (rembg + u2netp). One-time, ~50 min on M2 Pro."
+VENV="$DATA_DIR/.venv"
+if [ ! -d "$VENV" ]; then
+  echo "Creating Python venv for rembg at $VENV..."
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet --upgrade pip
+  "$VENV/bin/pip" install --quiet rembg onnxruntime pillow
+fi
+"$VENV/bin/python3" "$REPO_DIR/scripts/remove_pillbox_backgrounds.py"
+
 echo ""
 echo "=== Done ==="
 echo ""
