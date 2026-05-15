@@ -5117,7 +5117,9 @@ function medsRenderCard(med, compact) {
 
   // Pill identification button — only for actual pill forms, not shampoos / creams / drops / sprays / injections / liquids.
   // We look for explicit pill-form keywords in the display; if none present, hide the button.
-  const isPillForm = /\b(tablet|capsule|caplet|chewable|softgel|gel\s?cap|gelcap|sublingual|orally\s?disintegrating|odt|extended[- ]release|er\s+tab|cr\s+tab|sr\s+tab|lozenge|troche)s?\b/i.test(med.display || '');
+  // Includes pharmacy abbreviations (Tab, Tabs, Cap, Caps) — Epic often shortens
+  // "capsule" to "Caps" in MedicationRequest.medicationCodeableConcept.text.
+  const isPillForm = /\b(tablet|capsule|caplet|chewable|softgel|gel\s?cap|gelcap|sublingual|orally\s?disintegrating|odt|extended[- ]release|er\s+tab|cr\s+tab|sr\s+tab|lozenge|troche|tab|cap)s?\b/i.test(med.display || '');
   const pillBtnLabel = med.pill_image_url ? 'Change picture…' : 'Choose picture…';
   const pillIdBtn = (!compact && isPillForm) ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" title="Pick the picture of the pill you're taking">${pillBtnLabel}</button>` : '';
 
