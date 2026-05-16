@@ -18,6 +18,7 @@ RUN python -c "from rembg import new_session; new_session('u2netp')"
 
 # Shared modules
 COPY lib/loinc_synonyms.py /app/loinc_synonyms.py
+COPY lib/image_utils.py /app/image_utils.py
 
 # API app
 COPY api/app.py /app/app.py

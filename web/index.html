@@ -689,14 +689,13 @@
   }
   .med-pill-btn:hover { background: #eef5fb; border-color: #b8d4e6; }
   /* Thumbnail next to the med name showing the user's chosen pill (if any).
-     Sized large enough to actually read the imprint/color/shape; cropped to
-     center so the centered pill in NLM Pillbox photos fills the box (rather
-     than being a postage stamp surrounded by the photo's gray surface).
-     A small contrast bump helps the pill pop out of its photo background. */
+     The served PNGs are pre-cropped + padded to a square in the preprocessing
+     pipeline (lib/image_utils.crop_and_square), so the pill already fills
+     the frame. object-fit: contain keeps the full pill visible — no risk of
+     a poorly-centered NLM photo being cropped to its background corner. */
   .med-pill-thumb {
     width: 60px; height: 60px;
-    object-fit: cover;
-    object-position: center;
+    object-fit: contain;
     background: #fafafa;
     border: 1px solid #e0e6ed;
     border-radius: 8px;

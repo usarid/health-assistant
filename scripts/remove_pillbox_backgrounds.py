@@ -28,6 +28,11 @@ import sys
 import time
 from pathlib import Path
 
+# Use the shared crop helper from lib/ so the host preprocessing and the
+# api upload endpoint produce visually-consistent thumbnails.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+from image_utils import crop_to_pill_bbox  # noqa: E402
+
 
 # ── Defaults ──────────────────────────────────────────────────────────────
 DEFAULT_REPO = Path(__file__).resolve().parent.parent
@@ -108,6 +113,11 @@ def main() -> int:
             with Image.open(src_path) as img:
                 # rembg.remove accepts a PIL Image and returns a PIL Image with alpha.
                 cutout = remove(img, session=session)
+                # Tighten the cutout to the pill's bounding box so the saved
+                # thumbnail isn't a postage stamp surrounded by transparent
+                # padding. Aspect ratio matches the pill; frontend uses
+                # object-fit: contain inside a fixed square thumbnail.
+                cutout = crop_to_pill_bbox(cutout)
                 cutout.save(dst_path, format="PNG", optimize=True)
             processed += 1
         except Exception as e:

@@ -828,11 +828,16 @@ async def upload_pill_photo(
     aliases = await get_aliases()
     norm_key = resolve_key(normalize_med_name(raw_key), aliases)
 
-    # Decode + cut out background + save as PNG with alpha.
+    # Decode + cut out background + tighten to the pill's bounding box so
+    # casual phone snaps (where the pill might be 20% of the frame) end up
+    # with the pill filling the thumbnail. Same helper the offline Pillbox
+    # preprocessing uses, for visual consistency.
+    from image_utils import crop_to_pill_bbox
     try:
         with Image.open(io.BytesIO(data)) as img:
             img = img.convert("RGBA")
             cutout = remove(img, session=_get_rembg_session())
+            cutout = crop_to_pill_bbox(cutout)
     except Exception as e:
         return JSONResponse(
             status_code=400,
