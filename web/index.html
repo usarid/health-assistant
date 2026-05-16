@@ -5136,17 +5136,19 @@ function medsRenderCard(med, compact) {
     return unique.length ? '<div class="med-card-aka">Also known as: <strong>' + escHtml(unique.join(', ')) + '</strong></div>' : '';
   })();
 
-  // Pill identification button — only for actual pill forms, not shampoos / creams / drops / sprays / injections / liquids.
-  // We look for explicit pill-form keywords in the display; if none present, hide the button.
-  // Includes pharmacy abbreviations (Tab, Tabs, Cap, Caps) — Epic often shortens
-  // "capsule" to "Caps" in MedicationRequest.medicationCodeableConcept.text.
-  const isPillForm = /\b(tablet|capsule|caplet|chewable|softgel|gel\s?cap|gelcap|sublingual|orally\s?disintegrating|odt|extended[- ]release|er\s+tab|cr\s+tab|sr\s+tab|lozenge|troche|tab|cap)s?\b/i.test(med.display || '');
+  // "Choose picture…" is offered on every med, regardless of dose form. The
+  // Pillbox archive only has tablets/capsules/etc., but the upload path works
+  // for anything (a tube of cream, eye drops, inhaler, etc.) — and even when
+  // Pillbox returns no matches, the picker's empty state surfaces the upload
+  // CTA as the primary action. Previous heuristics (display regex, dosage
+  // sniffing) all had false negatives like "psyllium seed…(ORAL)" where the
+  // form is named in the dosage instructions but not the display.
   const pillBtnLabel = med.pill_image_url ? 'Change picture…' : 'Choose picture…';
-  const pillIdBtn = (!compact && isPillForm) ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" title="Pick the picture of the pill you're taking">${pillBtnLabel}</button>` : '';
+  const pillIdBtn = !compact ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" title="Choose or upload a picture for this medication">${pillBtnLabel}</button>` : '';
 
-  // Inline thumbnail for the user's chosen pill (clicking it also opens the picker).
-  const pillThumb = (med.pill_image_url && isPillForm)
-    ? `<img class="med-pill-thumb" src="${escAttr(med.pill_image_url)}" alt="Chosen pill" title="${escAttr([med.pill_imprint, med.pill_color, med.pill_shape].filter(Boolean).join(' · ').toLowerCase())}" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" onerror="this.style.display='none'">`
+  // Inline thumbnail for the user's chosen picture (clicking it also opens the picker).
+  const pillThumb = med.pill_image_url
+    ? `<img class="med-pill-thumb" src="${escAttr(med.pill_image_url)}" alt="Chosen picture" title="${escAttr([med.pill_imprint, med.pill_color, med.pill_shape].filter(Boolean).join(' · ').toLowerCase())}" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" onerror="this.style.display='none'">`
     : '';
 
   return `<div class="med-card ${compact ? 'med-card-compact' : ''}" data-status="${escAttr(med.effective_status)}" data-key="${escAttr(med.key)}" data-conflict="${med.has_conflict && !med.user_override}">
