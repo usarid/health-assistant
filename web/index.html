@@ -525,6 +525,20 @@
   .med-dismiss-btn { padding: 6px 14px; background: none; border: 1px solid #d4c5a0; border-radius: 6px; font-size: 12px; color: #92600a; cursor: pointer; }
   .med-dismiss-btn:hover { background: #fef3c7; }
   .med-card-actions { flex-shrink: 0; display: flex; gap: 6px; }
+  /* Right column on each med card: holds the status-control buttons at the
+     top and the (chosen or placeholder) picture below. Picture sits where
+     there'd otherwise be empty whitespace, so the visual weight balances. */
+  .med-card-actions-col { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; min-width: 120px; }
+  /* Borderless picture slot — the PNG cutouts have transparent backgrounds
+     and the card is white, so the pill appears to sit directly on the card
+     without a frame. Hover gives a subtle scale + shadow as the click cue. */
+  .med-pic-slot { width: 120px; height: 120px; overflow: hidden; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s, filter 0.15s; }
+  .med-pic-slot:hover { transform: scale(1.03); filter: drop-shadow(0 2px 6px rgba(0,0,0,0.15)); }
+  .med-pic { width: 100%; height: 100%; object-fit: contain; display: block; filter: contrast(1.08) saturate(1.1); }
+  /* Empty-state affordance: a real button styled to match Mark stopped / Reset
+     so it reads as a peer of the other right-column controls, not a footnote. */
+  .med-pic-add { padding: 5px 14px; border: 1px solid #ddd; background: white; border-radius: 999px; font-size: 11px; color: #4889ad; cursor: pointer; transition: all 0.15s; }
+  .med-pic-add:hover { border-color: #4889ad; background: #eef5fb; }
   .med-action-btn { padding: 5px 10px; border: 1px solid #ddd; background: white; border-radius: 6px; font-size: 11px; color: #666; cursor: pointer; transition: all 0.15s; }
   .med-action-btn:hover { border-color: #aaa; color: #333; background: #f8f8f8; }
   .med-action-btn.taking { border-color: #27ae60; color: #27ae60; }
@@ -1223,6 +1237,11 @@
     .meds-add-btn { padding: 10px 16px; font-size: 14px; min-height: 40px; }
     .meds-filters { flex-wrap: wrap; gap: 6px; }
     .meds-filter { padding: 8px 14px; font-size: 13px; min-height: 36px; }
+
+    /* Picture column shrinks on narrow screens so the info column still has
+       a reasonable width for the med name + dosage rows. */
+    .med-card-actions-col { min-width: 88px; gap: 8px; }
+    .med-pic-slot { width: 88px; height: 88px; }
 
     /* ── Toast positioned above the bottom nav ── */
     .meds-toast { bottom: calc(80px + env(safe-area-inset-bottom)); }
@@ -5136,35 +5155,39 @@ function medsRenderCard(med, compact) {
     return unique.length ? '<div class="med-card-aka">Also known as: <strong>' + escHtml(unique.join(', ')) + '</strong></div>' : '';
   })();
 
-  // "Choose picture…" is offered on every med, regardless of dose form. The
-  // Pillbox archive only has tablets/capsules/etc., but the upload path works
-  // for anything (a tube of cream, eye drops, inhaler, etc.) — and even when
-  // Pillbox returns no matches, the picker's empty state surfaces the upload
-  // CTA as the primary action. Previous heuristics (display regex, dosage
-  // sniffing) all had false negatives like "psyllium seed…(ORAL)" where the
-  // form is named in the dosage instructions but not the display.
-  const pillBtnLabel = med.pill_image_url ? 'Change picture…' : 'Choose picture…';
-  const pillIdBtn = !compact ? `<button class="med-pill-btn" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" title="Choose or upload a picture for this medication">${pillBtnLabel}</button>` : '';
+  // Right-column picture slot. Offered on every med, regardless of dose form
+  // (Pillbox covers tablets/capsules/etc., but the upload path works for any
+  // medication — a tube of cream, eye drops, inhaler — and an empty Pillbox
+  // result page promotes "Use my own photo…" as the primary action). When a
+  // picture is set, render it as a 120 px clickable thumbnail; otherwise
+  // render a small "+ Add picture" link so the affordance is discoverable
+  // but doesn't shout. Both targets open the same picker modal.
+  const titleAttr = escAttr([med.pill_imprint, med.pill_color, med.pill_shape].filter(Boolean).join(' · ').toLowerCase() || 'Change this picture');
+  const picture = !compact
+    ? (med.pill_image_url
+        ? `<div class="med-pic-slot" title="${titleAttr}" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')"><img class="med-pic" src="${escAttr(med.pill_image_url)}" alt="Chosen picture" onerror="this.parentElement.innerHTML = '&lt;span style=color:#bbb;font-size:11px&gt;image unavailable&lt;/span&gt;'"></div>`
+        : `<button class="med-pic-add" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" title="Choose or upload a picture for this medication">Add picture</button>`)
+    : '';
 
-  // Inline thumbnail for the user's chosen picture (clicking it also opens the picker).
-  const pillThumb = med.pill_image_url
-    ? `<img class="med-pill-thumb" src="${escAttr(med.pill_image_url)}" alt="Chosen picture" title="${escAttr([med.pill_imprint, med.pill_color, med.pill_shape].filter(Boolean).join(' · ').toLowerCase())}" onclick="medsShowPillImage('${escAttr(med.key)}','${escAttr(med.display)}')" onerror="this.style.display='none'">`
+  // Right column wraps the action buttons (top) and the picture (below), so
+  // they share the formerly-empty area to the right of the dosage rows.
+  const rightCol = (actions || picture)
+    ? `<div class="med-card-actions-col">${actions ? `<div class="med-card-actions">${actions}</div>` : ''}${picture}</div>`
     : '';
 
   return `<div class="med-card ${compact ? 'med-card-compact' : ''}" data-status="${escAttr(med.effective_status)}" data-key="${escAttr(med.key)}" data-conflict="${med.has_conflict && !med.user_override}">
     <div class="med-card-top">
       <div class="med-card-status ${escAttr(statusClass)}"></div>
       <div class="med-card-info">
-        <div class="med-card-name-row">${pillThumb}<span class="med-card-name">${escHtml(med.display)}</span></div>
+        <div class="med-card-name">${escHtml(med.display)}</div>
         ${akaHtml}
         <div class="med-card-meta">${escHtml(statusLabel)} · Last ordered ${escHtml(med.most_recent_order || 'unknown')}${prescriberHtml}${historyCount}</div>
         ${dosFreqHtml}
         ${rawDosageText}
         ${badges}
-        ${pillIdBtn}
         ${historyHtml}
       </div>
-      ${actions ? `<div class="med-card-actions">${actions}</div>` : ''}
+      ${rightCol}
     </div>
   </div>`;
 }
