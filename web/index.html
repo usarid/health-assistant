@@ -819,6 +819,28 @@
   }
   .pill-picker-clear:hover { background: #fdecea; }
   .pill-picker-clear[disabled] { visibility: hidden; }
+  /* "Use my own photo" link in the picker footer — same visual weight as
+     Clear selection. The actual file <input> is hidden; the label triggers it. */
+  .pill-picker-upload {
+    color: #4889ad; font-size: 12px; font-weight: 500;
+    cursor: pointer; padding: 4px 8px;
+    border-radius: 4px;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .pill-picker-upload:hover { background: #eef5fb; }
+  .pill-picker-upload input[type="file"] { display: none; }
+  .pill-picker-upload-busy { color: #888; cursor: wait; pointer-events: none; }
+  /* Empty-state CTA — when the Pillbox returns zero matches, we still want
+     the upload affordance to be obvious, not buried in the footer. */
+  .pill-empty .pill-picker-upload {
+    display: inline-flex;
+    margin-top: 16px;
+    padding: 10px 18px;
+    background: #4889ad; color: white;
+    font-size: 14px;
+    border-radius: 6px;
+  }
+  .pill-empty .pill-picker-upload:hover { background: #366d8a; }
   .pill-result-grid {
     display: grid;
     grid-template-columns: 140px 1fr;
@@ -5177,10 +5199,19 @@ async function medsShowPillImage(medKey, displayName) {
     }
     if (!data.results || data.results.length === 0) {
       const term = data.search_term || displayName;
+      // Empty state: promote the upload affordance as the primary CTA so the
+      // user has an obvious path forward rather than just an apology message.
       body.innerHTML = `<div class="pill-empty">
         No pill images found for <strong>"${escHtml(displayName)}"</strong>
         <small>Searched Pillbox archive for "${escHtml(term)}". Common gaps: pre-2020 generics not catalogued, post-2020 new formulations, ointments, injections, compounded meds.</small>
+        <label class="pill-picker-upload">
+          <input type="file" accept="image/*" capture="environment" onchange="medsUploadPillPhoto(this)">
+          📷 Use my own photo…
+        </label>
       </div>`;
+      // Stash med_key/display so the upload handler can reach them.
+      modal._pillMedKey = medKey;
+      modal._pillMedDisplay = displayName;
       return;
     }
 
@@ -5230,8 +5261,12 @@ async function medsShowPillImage(medKey, displayName) {
     body.innerHTML = help + html + `
       <div class="pill-picker-actions">
         <button class="pill-picker-clear" onclick="medsClearPillChoice()" ${hasCurrentChoice ? '' : 'disabled'}>Clear selection</button>
-        <div class="pill-source" style="text-align:right; padding:0; border:none; margin:0;">NLM Pillbox archive · ${data.total} match${data.total === 1 ? '' : 'es'}</div>
-      </div>`;
+        <label class="pill-picker-upload">
+          <input type="file" accept="image/*" capture="environment" onchange="medsUploadPillPhoto(this)">
+          📷 Use my own photo…
+        </label>
+      </div>
+      <div class="pill-source">NLM Pillbox archive · ${data.total} match${data.total === 1 ? '' : 'es'}</div>`;
   } catch (e) {
     body.innerHTML = `<div class="pill-empty">Failed to load: ${escHtml(e.message)}</div>`;
   }
@@ -5302,6 +5337,81 @@ async function medsClearPillChoice() {
     }
   } catch (e) {
     alert('Could not clear your pill selection:\n\n' + (e.message || e));
+    return;
+  }
+
+  medsInitialized = false;
+  medsData = [];
+  medsClosePillModal();
+  if (typeof medsLoad === 'function') medsLoad();
+  else if (typeof loadMeds === 'function') loadMeds();
+}
+
+// Upload a user-taken pill photo. The <input type="file"> in the picker
+// triggers this on change. We POST the raw file to /api/meds/pill-photo,
+// the server runs rembg server-side and returns a URL pointing at the
+// cutout in the user-photos volume. We then PUT that URL into the existing
+// pill-choice endpoint so it persists exactly like a Pillbox selection.
+async function medsUploadPillPhoto(inputEl) {
+  const file = inputEl.files && inputEl.files[0];
+  if (!file) return;
+  const modal = document.getElementById('pill-modal');
+  const medKey = modal._pillMedKey;
+  const displayName = modal._pillMedDisplay;
+  if (!medKey) {
+    alert('Could not determine which medication this is for. Close the picker and try again.');
+    return;
+  }
+
+  // Visually indicate work is in flight on the triggering label.
+  const label = inputEl.closest('.pill-picker-upload');
+  if (label) {
+    label.classList.add('pill-picker-upload-busy');
+    label.firstChild.nextSibling.textContent && 0;  // no-op; keep template readable
+  }
+  const body = document.getElementById('pill-modal-body');
+  const prevHTML = body.innerHTML;
+  body.innerHTML = `<div class="pill-loading">Processing photo… (removing background)</div>`;
+
+  let uploaded;
+  try {
+    const form = new FormData();
+    form.append('med_key', medKey);
+    form.append('file', file);
+    const resp = await fetch('/api/meds/pill-photo', { method: 'POST', body: form });
+    uploaded = await resp.json().catch(() => ({}));
+    if (!resp.ok || uploaded.error) {
+      body.innerHTML = prevHTML;
+      alert('Could not process the photo:\n\n' + (uploaded.error || resp.statusText || 'Unknown error'));
+      return;
+    }
+  } catch (e) {
+    body.innerHTML = prevHTML;
+    alert('Could not upload the photo:\n\n' + (e.message || e));
+    return;
+  }
+
+  // Now persist the URL as the chosen pill picture for this med. We pass
+  // empty imprint/color/shape since this came from a user photo, not the
+  // Pillbox appearance index.
+  try {
+    const resp = await fetch('/api/meds/pill-choice', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        med_key: medKey,
+        display_name: displayName,
+        imprint: '', color: '', shape: '',
+        image_url: uploaded.image_url,
+      }),
+    });
+    const result = await resp.json().catch(() => ({}));
+    if (!resp.ok || result.error) {
+      alert('Photo uploaded, but could not save it as your choice:\n\n' + (result.error || resp.statusText || 'Unknown error'));
+      return;
+    }
+  } catch (e) {
+    alert('Photo uploaded, but could not save it as your choice:\n\n' + (e.message || e));
     return;
   }
 

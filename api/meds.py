@@ -21,7 +21,8 @@ from typing import Optional
 
 import aiosqlite
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger("meds")
 router = APIRouter(prefix="/api/meds", tags=["meds"])
@@ -766,6 +767,93 @@ async def set_pill_choice(request: Request):
         "pill_shape": shape,
         "pill_image_url": image_url,
     }
+
+
+# ── User-uploaded pill photos ─────────────────────────────────────────────
+# Path inside the container where the api writes user photos (read-write
+# bind mount). The web container mounts the same host dir read-only and
+# serves it as /user-pill-photos/*.png via nginx.
+USER_PHOTOS_DIR = "/user-pill-photos"
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB — iPhone HDR shots are routinely 5-8 MB
+
+# Lazy-initialized rembg session — created once per process, reused for every
+# upload. Pre-warmed at image-build time so the first request doesn't pay the
+# model-download or ORT-init cost.
+_rembg_session = None
+
+
+def _get_rembg_session():
+    global _rembg_session
+    if _rembg_session is None:
+        from rembg import new_session  # imported lazily to keep cold-start cheap if upload never used
+        _rembg_session = new_session("u2netp")
+    return _rembg_session
+
+
+@router.post("/pill-photo")
+async def upload_pill_photo(
+    med_key: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """Accept a user-taken photo of a pill, strip its background, save the
+    result as <med_key>.png in the shared user_photos volume, and return the
+    URL that nginx will serve it from. The caller is expected to PUT the
+    returned URL into /api/meds/pill-choice to persist it as that med's
+    chosen picture.
+
+    Files are overwritten in place per (normalized) med_key — no orphans,
+    no audit history (this is a personal-vault visual aid, not a record).
+    """
+    from rembg import remove
+    from PIL import Image
+    import io
+
+    raw_key = (med_key or "").strip()
+    if not raw_key:
+        return JSONResponse(status_code=400, content={"error": "med_key is required"})
+
+    # Read the upload, bounded by the size cap so a malicious client can't
+    # exhaust memory by streaming forever.
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content={"error": f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit"},
+        )
+    if not data:
+        return JSONResponse(status_code=400, content={"error": "Empty file"})
+
+    # Normalize the key through the same alias chain as the rest of the meds
+    # endpoints so an override row inserted here groups correctly later.
+    aliases = await get_aliases()
+    norm_key = resolve_key(normalize_med_name(raw_key), aliases)
+
+    # Decode + cut out background + save as PNG with alpha.
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            img = img.convert("RGBA")
+            cutout = remove(img, session=_get_rembg_session())
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Could not process image: {e}"},
+        )
+
+    os.makedirs(USER_PHOTOS_DIR, exist_ok=True)
+    # Filename = med_key, sanitized so it can't escape USER_PHOTOS_DIR.
+    safe_name = re.sub(r"[^a-z0-9_-]+", "_", norm_key.lower()) or "pill"
+    out_path = os.path.join(USER_PHOTOS_DIR, f"{safe_name}.png")
+    try:
+        cutout.save(out_path, format="PNG", optimize=True)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Could not save: {e}"})
+
+    # Cache-busting query string: the file is overwritten in place, so we
+    # need the browser to skip its previous version when the user replaces
+    # the photo. Mtime as a version tag is cheap and adequate.
+    version = int(os.path.getmtime(out_path))
+    image_url = f"/user-pill-photos/{safe_name}.png?v={version}"
+    return {"ok": True, "med_key": norm_key, "image_url": image_url}
 
 
 @router.delete("/override")
