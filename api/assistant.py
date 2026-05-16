@@ -204,10 +204,19 @@ async def execute_proposed_action(action: dict) -> dict:
             aliases = await get_aliases()
             med_key = resolve_key(normalize_med_name(med_key), aliases)
             db = await get_meds_db()
+            # ON CONFLICT only overwrites display_name when the caller actually
+            # passes a non-empty one — otherwise a status-only update (e.g.
+            # "I stopped taking this") would wipe out the user-visible name.
+            # This also makes the rename path work: a proposed update with
+            # params.display_name="magnesium citrate" now actually re-labels
+            # the existing row.
             await db.execute(
                 """INSERT INTO med_overrides (med_key, display_name, status, notes, user_dosage, user_frequency, updated_at)
                    VALUES (?, ?, ?, ?, '', '', ?)
                    ON CONFLICT(med_key) DO UPDATE SET
+                     display_name = CASE WHEN excluded.display_name != ''
+                                         THEN excluded.display_name
+                                         ELSE display_name END,
                      status = excluded.status,
                      notes = excluded.notes,
                      updated_at = excluded.updated_at""",

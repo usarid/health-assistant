@@ -572,9 +572,18 @@ async def _build_medication_list() -> dict:
         # Is patient-reported?
         patient_reported = any(rec["patient_reported"] for rec in records)
 
+        # User-edited display name wins over the FHIR-derived best_display.
+        # This is how a "rename" (e.g. magnesium → magnesium citrate, or
+        # tylenol → acetaminophen) becomes visible — without it, override
+        # rows can store a new display_name but the card keeps showing the
+        # original FHIR string forever.
+        override_display = (override.get("display_name") or "").strip() if override else ""
+        effective_display = override_display or best_display
+
         medications.append({
             "key": norm_name,
-            "display": best_display,
+            "display": effective_display,
+            "fhir_display": best_display,
             "effective_status": effective_status,
             "has_conflict": has_conflict,
             "user_override": user_status,
