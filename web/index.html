@@ -61,6 +61,49 @@
   .profile-unit-toggle { font-size: 11px; color: #3498db; cursor: pointer; border: none; background: none; padding: 2px 6px; border-radius: 4px; }
   .profile-unit-toggle:hover { background: #f0f4f8; }
 
+  /* App settings — collapsible card at the bottom of the Me tab. Distinct
+     from the medical-data sections above (different visual treatment) so the
+     user knows that toggling things here doesn't touch their health record.
+     Header styled as a tappable row in the iOS Settings idiom: title on the
+     left, chevron on the right, generous padding, hover tint. */
+  .app-settings { margin-top: 24px; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); padding: 0; }
+  .app-settings > summary { list-style: none; cursor: pointer; padding: 18px 56px 18px 20px; font-size: 15px; font-weight: 600; color: #1a1a2e; position: relative; user-select: none; -webkit-tap-highlight-color: transparent; border-radius: 12px; transition: background 0.12s; }
+  .app-settings > summary::-webkit-details-marker { display: none; }
+  /* Chevron via two borders rotated 45° — sharper at small sizes than the
+     unicode characters and easy to recolor + rotate. Points right when
+     closed, rotates to point down when the <details> is open. */
+  .app-settings > summary::after {
+    content: "";
+    position: absolute;
+    right: 22px;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-right: 2px solid #888;
+    border-bottom: 2px solid #888;
+    transform: translateY(-70%) rotate(-45deg);
+    transition: transform 0.18s;
+  }
+  .app-settings[open] > summary::after { transform: translateY(-20%) rotate(45deg); }
+  .app-settings > summary:hover { background: #f7f9fc; }
+  .app-settings > summary:hover::after { border-color: #4889ad; }
+  .app-settings > summary:active { background: #eef5fb; }
+  .app-settings-body { padding: 0 20px 16px; border-top: 1px solid #f0f0f0; }
+  .app-settings-section { padding: 12px 0; border-bottom: 1px solid #f5f5f5; }
+  .app-settings-section:last-child { border-bottom: none; padding-bottom: 4px; }
+  /* The "Saved" status flash after a pref change — used to reserve 16 px of
+     always-empty space, which read as a big gap above the App section. Let
+     it shrink to nothing when empty; the brief layout shift when "Saved"
+     appears for ~1s is barely noticeable. */
+  .app-settings-section .ast-pref-status { min-height: 0; }
+  .app-settings-subhead { margin: 0 0 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #3498db; }
+  .app-settings-help { font-size: 11px; color: #999; margin-top: 6px; line-height: 1.4; }
+  .app-settings-btn { padding: 6px 14px; border: 1px solid #ddd; background: white; border-radius: 6px; font-size: 12px; color: #4889ad; cursor: pointer; transition: all 0.15s; font-weight: 500; }
+  .app-settings-btn:hover { border-color: #4889ad; background: #eef5fb; }
+  .app-settings-btn.danger { color: #b91c1c; }
+  .app-settings-btn.danger:hover { border-color: #b91c1c; background: #fee; }
+  .app-settings-btn[disabled] { opacity: 0.6; cursor: wait; }
+
   .profile-cond-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
   .profile-cond-tab { font-size: 11px; padding: 4px 10px; border-radius: 12px; border: 1px solid #e5e7eb; background: white; color: #888; cursor: pointer; }
   .profile-cond-tab.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
@@ -1259,10 +1302,9 @@
   <a href="#" class="active" data-page="home">Home</a>
   <a href="#" data-page="assistant"><span class="ast-name">Assistant</span></a>
   <a href="#" data-page="meds">Meds</a>
-  <a href="#" data-page="profile">Me</a>
   <a href="#" data-page="timeline">Timeline</a>
   <a href="#" data-page="search">Search</a>
-  <a href="/cdn-cgi/access/logout" class="nav-logout" title="Sign out of Cloudflare Access">Sign out</a>
+  <a href="#" data-page="profile">Me</a>
 </nav>
 <div class="status-bar" id="status-bar" onclick="toggleStatusBar(event)" title="Click for system status details">
   <span class="status-summary">
@@ -1311,6 +1353,66 @@
   <div id="profile-content">
     <div class="profile-loading">Loading your health profile...</div>
   </div>
+
+  <!-- App settings — separate from medical-record data above. Collapsed by
+       default. Hosts assistant preferences, app-reload, sign-out. The IDs
+       on the pref inputs (pref-name etc.) are the same the original
+       ast-prefs-panel used, so astSavePrefs() / astLoadPrefs() in the
+       existing JS work unchanged. -->
+  <details class="app-settings" id="app-settings">
+    <summary>App settings</summary>
+    <div class="app-settings-body">
+
+      <div class="app-settings-section">
+        <h4 class="app-settings-subhead">Assistant preferences</h4>
+        <label class="ast-pref-label">Assistant name</label>
+        <input type="text" id="pref-name" class="ast-pref-select" placeholder="Assistant" maxlength="30" onblur="astSavePrefs()" onkeydown="if(event.key==='Enter'){this.blur();}">
+        <label class="ast-pref-label">Response length</label>
+        <select id="pref-length" class="ast-pref-select" onchange="astSavePrefs()">
+          <option value="">Default</option>
+          <option value="concise">Concise — short, to the point</option>
+          <option value="moderate">Moderate — balanced detail</option>
+          <option value="detailed">Detailed — thorough explanations</option>
+        </select>
+        <label class="ast-pref-label">Tone</label>
+        <select id="pref-tone" class="ast-pref-select" onchange="astSavePrefs()">
+          <option value="">Default</option>
+          <option value="clinical">Clinical — professional, factual</option>
+          <option value="friendly">Friendly — warm, conversational</option>
+          <option value="empathetic">Empathetic — supportive, reassuring</option>
+        </select>
+        <label class="ast-pref-label">Technical detail</label>
+        <select id="pref-detail" class="ast-pref-select" onchange="astSavePrefs()">
+          <option value="">Default</option>
+          <option value="simplified">Simplified — plain language</option>
+          <option value="standard">Standard — some medical terms</option>
+          <option value="expert">Expert — full medical terminology</option>
+        </select>
+        <label class="ast-pref-label">Max data lookups per question</label>
+        <select id="pref-max-rounds" class="ast-pref-select" onchange="astSavePrefs()">
+          <option value="3">3 — faster, less thorough</option>
+          <option value="5" selected>5 — balanced (default)</option>
+          <option value="8">8 — thorough</option>
+          <option value="12">12 — very thorough</option>
+        </select>
+        <label class="ast-pref-label">Custom instructions</label>
+        <textarea id="pref-custom" class="ast-pref-textarea" rows="3" placeholder="E.g., Always start with a brief answer, then elaborate..." onblur="astSavePrefs()"></textarea>
+        <div class="ast-pref-status" id="pref-status"></div>
+      </div>
+
+      <div class="app-settings-section">
+        <h4 class="app-settings-subhead">App</h4>
+        <button class="app-settings-btn" id="app-reload-btn" onclick="appReload(this)">Reload app</button>
+        <div class="app-settings-help">Clears local caches and fetches the latest version.</div>
+      </div>
+
+      <div class="app-settings-section">
+        <h4 class="app-settings-subhead">Account</h4>
+        <button class="app-settings-btn danger" id="app-sign-out-btn">Sign out</button>
+      </div>
+
+    </div>
+  </details>
 </div>
 
 <!-- ═══════════════ SEARCH PAGE ═══════════════ -->
@@ -1422,46 +1524,6 @@
         <h3 onclick="astToggleThreads(event)" title="Show / hide conversations">Conversations</h3>
         <div style="display:flex;gap:6px;">
           <button class="ast-new-btn" onclick="astNewThread()">+ New</button>
-          <button class="ast-new-btn" style="background:#7f8c8d;" onclick="astTogglePrefs()" title="Preferences">&#9881;</button>
-        </div>
-      </div>
-      <div class="ast-prefs-panel" id="ast-prefs-panel" style="display:none;">
-        <div style="padding:12px 16px;border-bottom:1px solid #eee;">
-          <h4 style="margin:0 0 10px;font-size:13px;color:#555;">Response Preferences</h4>
-          <label class="ast-pref-label">Assistant name</label>
-          <input type="text" id="pref-name" class="ast-pref-select" placeholder="Assistant" maxlength="30" onblur="astSavePrefs()" onkeydown="if(event.key==='Enter'){this.blur();}">
-          <label class="ast-pref-label">Length</label>
-          <select id="pref-length" class="ast-pref-select" onchange="astSavePrefs()">
-            <option value="">Default</option>
-            <option value="concise">Concise — short, to the point</option>
-            <option value="moderate">Moderate — balanced detail</option>
-            <option value="detailed">Detailed — thorough explanations</option>
-          </select>
-          <label class="ast-pref-label">Tone</label>
-          <select id="pref-tone" class="ast-pref-select" onchange="astSavePrefs()">
-            <option value="">Default</option>
-            <option value="clinical">Clinical — professional, factual</option>
-            <option value="friendly">Friendly — warm, conversational</option>
-            <option value="empathetic">Empathetic — supportive, reassuring</option>
-          </select>
-          <label class="ast-pref-label">Technical detail</label>
-          <select id="pref-detail" class="ast-pref-select" onchange="astSavePrefs()">
-            <option value="">Default</option>
-            <option value="simplified">Simplified — plain language</option>
-            <option value="standard">Standard — some medical terms</option>
-            <option value="expert">Expert — full medical terminology</option>
-          </select>
-          <label class="ast-pref-label">Max data lookups per question</label>
-          <select id="pref-max-rounds" class="ast-pref-select" onchange="astSavePrefs()">
-            <option value="3">3 — faster, less thorough</option>
-            <option value="5" selected>5 — balanced (default)</option>
-            <option value="8">8 — thorough</option>
-            <option value="12">12 — very thorough</option>
-          </select>
-          <label class="ast-pref-label">Custom instructions</label>
-          <textarea id="pref-custom" class="ast-pref-textarea" rows="3" placeholder="E.g., Always start with a brief answer, then elaborate..."
-                    onblur="astSavePrefs()"></textarea>
-          <div class="ast-pref-status" id="pref-status"></div>
         </div>
       </div>
       <div class="ast-thread-list" id="ast-thread-list"></div>
@@ -1624,12 +1686,13 @@ document.querySelectorAll('nav a[data-page]').forEach(link => {
   });
 });
 
-// Sign-out: clear the Cloudflare Access session cookie via a same-origin
-// fetch (the response Set-Cookie expires CF_Authorization), then show a
-// Bina-branded goodbye view instead of the default CF logout page.
-const signOutLink = document.querySelector('.nav-logout');
-if (signOutLink) {
-  signOutLink.addEventListener('click', async e => {
+// Sign-out (now lives in Me → App settings → Account): clear the Cloudflare
+// Access session cookie via a same-origin fetch (the response Set-Cookie
+// expires CF_Authorization), then replace the page with a Bina-branded
+// goodbye view instead of routing through CF's default logout page.
+const signOutBtn = document.getElementById('app-sign-out-btn');
+if (signOutBtn) {
+  signOutBtn.addEventListener('click', async e => {
     e.preventDefault();
     try { await fetch('/cdn-cgi/access/logout', { credentials: 'same-origin' }); } catch (_) {}
     document.body.innerHTML = `
@@ -1641,6 +1704,26 @@ if (signOutLink) {
         </div>
       </div>`;
   });
+}
+
+// Reload app: clear best-effort client-side caches (Cache API + any stray
+// service worker registrations) and then trigger a full reload. The nginx
+// response for index.html now ships Cache-Control: no-store, so the reload
+// genuinely fetches the latest version from origin — useful especially on
+// iOS home-screen-saved web apps where there's no visible Safari chrome.
+async function appReload(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Reloading…'; }
+  try {
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+    }
+  } catch (_) { /* best effort; fall through to reload */ }
+  location.reload();
 }
 
 function showPage(page) {
@@ -3715,11 +3798,9 @@ async function initAssistant() {
 }
 
 // ── Preferences ──
-
-function astTogglePrefs() {
-  const panel = document.getElementById('ast-prefs-panel');
-  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-}
+// The preference inputs (#pref-name, #pref-length, etc.) live in the Me →
+// App settings → Assistant preferences subsection. astLoad/SavePrefs are
+// shared by the prefs UI there and called from the input's onchange/onblur.
 
 async function astLoadPrefs() {
   try {
