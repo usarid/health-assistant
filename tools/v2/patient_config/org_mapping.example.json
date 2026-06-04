@@ -1,0 +1,55 @@
+{
+  "_comment": "Patient-specific organizationId → institution mapping for tools/v2/convert_messages.py.",
+  "_purpose": [
+    "Each patient's linked-accounts cluster in MyChart has its own organizationId values and its own set of clinicians per organization. This file maps the signals (platform sender labels, named participants in conversation.users dicts, distinctive body phrases) to friendly institution codes.",
+    "Per CONCLUSIONS_LOG.md C-009: signal priority is platform_sender_label > user_name > body_phrase. Clinician affiliation as a signal must be anchored on an external verification (e.g., the clinician's listing on the org's website), not inferred.",
+    "Per CONCLUSIONS_LOG.md C-008: the empty organizationId means a thread is native to the source portal (the one the patient logged into to scrape). Encoded as the special applies_when='empty_org_id' rule below.",
+    "This file is the .example template with placeholder values. Copy to org_mapping.json and edit with the actual patient-specific mapping. org_mapping.json is gitignored."
+  ],
+  "_signal_types": {
+    "platform_sender_label": "Matches when the named string appears as a message author's displayName. These are system-generated labels like '<Org> MyChart Messaging User' — the strongest signal because they explicitly name the Epic instance.",
+    "user_name": "Matches when the named string appears as one of the .name values in a thread's users dict. Use the clinician's exact public-listing name. Must be verifiable on an external website.",
+    "body_phrase": "Matches case-sensitively as a substring of any message body. Use distinctive institutional identifiers (e.g., 'IRB #19-000001'), not clinical content. Per C-009 this is the weakest signal — use only when no stronger signal is available."
+  },
+  "default": "UNKNOWN",
+  "primary_portal_code": "PrimaryPortal",
+  "rules": [
+    {
+      "code": "ExampleOrgA",
+      "reason": "platform-sender-label",
+      "any_of": [
+        {"signal": "platform_sender_label", "value": "ExampleOrgA MyChart Messaging User"}
+      ]
+    },
+    {
+      "code": "ExampleOrgB",
+      "reason": "platform-sender-label",
+      "any_of": [
+        {"signal": "user_name", "value": "ExampleOrgB MyChart Team"}
+      ]
+    },
+    {
+      "code": "ExampleOrgC",
+      "reason": "clinician-verified-on-public-listing",
+      "any_of": [
+        {"signal": "user_name", "value": "Dr. Generic Specialist, M.D."},
+        {"signal": "body_phrase", "value": "ExampleOrgC IRB #00-000001"}
+      ]
+    },
+    {
+      "code": "ExampleOrgD",
+      "reason": "clinician-verified-on-public-listing",
+      "any_of": [
+        {"signal": "user_name", "value": "Another Generic Clinician, M.D."}
+      ]
+    },
+    {
+      "code": "ExampleOrgE",
+      "reason": "clinician-verified-on-public-listing",
+      "any_of": [
+        {"signal": "user_name", "value": "Yet Another Clinician, MD"},
+        {"signal": "user_name", "value": "Second Generic Clinician, MD"}
+      ]
+    }
+  ]
+}
