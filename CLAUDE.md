@@ -4,7 +4,7 @@
 
 A self-hosted personal health record system that aggregates clinical data from multiple institutions (Stanford, UCSF, Mayo, MSKCC, Sutter), Apple Health wearables, and Epic on FHIR into a unified FHIR R4 database. Includes an AI assistant (Claude), medication reconciliation, trend analysis, and a reminder system.
 
-Built by Uri Sarid. Single-user, runs on a Mac Mini behind a Cloudflare Tunnel at `bina.saridium.com`.
+Personal project, single-user. Runs on a Mac Mini behind a Cloudflare Tunnel.
 
 ## Architecture
 

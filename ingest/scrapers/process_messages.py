@@ -53,25 +53,31 @@ def parse_preview(preview_text):
     return result
 
 def classify_institution(preview):
-    """Classify which institution a message is from based on preview text."""
+    """Classify which institution a message is from based on preview text.
+
+    DEPRECATED: This keyword-based classifier is unreliable and outdated.
+    See docs/CONCLUSIONS_LOG.md C-009 for the methodology problem (clinician
+    name is not a reliable proxy for Epic instance) and tools/v2/convert_messages.py
+    for the replacement, which uses authoritative organizationId from the
+    raw scrape rather than text classification.
+
+    This stub remains so existing call sites don't break. Patient-specific
+    keyword lists were removed; the function now only uses generic institutional
+    names available from the preview itself.
+    """
     p = preview.lower()
-    if any(k in p for k in ['mskcc', 'sloan', 'palomba', 'karlin', 'emily s', 'sophia g', 
-                             'bone marrow', 'myeloma', 'teclistamab', 'liedtke']):
+    if 'mskcc' in p or 'sloan' in p:
         return 'MSKCC'
-    if any(k in p for k in ['ucsf', 'poncelet', 'zaphiris', 'san francisco surgical']):
+    if 'ucsf' in p:
         return 'UCSF'
-    if any(k in p for k in ['stanford']):
+    if 'stanford' in p:
         return 'Stanford'
-    if any(k in p for k in ['sutter', 'pacific internal', 'partida', 'ramon partida']):
-        return 'Sutter/PCP'
-    if any(k in p for k in ['mayo']):
+    if 'sutter' in p or 'pacific internal' in p:
+        return 'Sutter'
+    if 'mayo' in p:
         return 'Mayo'
-    if any(k in p for k in ['marinhealth', 'marin health']):
+    if 'marinhealth' in p or 'marin health' in p:
         return 'MarinHealth'
-    if any(k in p for k in ['fazzolari', 'gastroenterol', 'colonoscopy', 'endoscopy', 'gi patient']):
-        return 'GI/Fazzolari'
-    if any(k in p for k in ['kwon', 'annette']):
-        return 'Referral/Kwon'
     return 'Unknown'
 
 def create_fhir_communication(thread, index):

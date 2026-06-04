@@ -5994,7 +5994,9 @@ function renderHomeGreeting() {
   if (hour < 12) greeting = 'Good morning';
   else if (hour < 17) greeting = 'Good afternoon';
   el.className = 'home-greeting';
-  el.textContent = greeting + ', Uri';
+  // Greeting name comes from BINA_USER_NAME if set, otherwise generic
+  const userName = (window.BINA_USER_NAME || '').trim();
+  el.textContent = userName ? `${greeting}, ${userName}` : greeting;
   dateEl.className = 'home-date';
   dateEl.textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 }

@@ -5,7 +5,7 @@ Extract remaining untapped data sources:
 - MSKCC Media PDF files
 - Apple Health ECG files
 - Apple Health CDA export
-- Dr. Zaphiris folder
+- External provider PDF folder (configurable via env)
 - Imaging folder
 - ScienceDirect articles
 """
@@ -45,7 +45,7 @@ def create_document_reference(doc_id: str, title: str, doc_type: str,
             }]
         },
         "subject": {
-            "reference": "Patient/patient-uri-sarid"
+            "reference": "Patient/patient-primary"
         },
         "date": date,
         "description": title,
@@ -80,7 +80,7 @@ def create_observation(obs_id: str, code: str, code_display: str, value: str,
             }]
         },
         "subject": {
-            "reference": "Patient/patient-uri-sarid"
+            "reference": "Patient/patient-primary"
         },
         "effectiveDateTime": date,
         "issued": date
@@ -147,7 +147,7 @@ def extract_ecg_data() -> List[Dict]:
                             "display": "ECG Rhythm"
                         }]
                     },
-                    "subject": {"reference": "Patient/patient-uri-sarid"},
+                    "subject": {"reference": "Patient/patient-primary"},
                     "effectiveDateTime": date_iso,
                     "valueCodeableConcept": {
                         "coding": [{
@@ -273,7 +273,7 @@ def extract_imaging_metadata() -> List[Dict]:
                                 "display": "Pathology Study"
                             }]
                         },
-                        "subject": {"reference": "Patient/patient-uri-sarid"},
+                        "subject": {"reference": "Patient/patient-primary"},
                         "date": "2026-01-01"
                     }
                     resources.append(doc)
@@ -286,35 +286,44 @@ def extract_imaging_metadata() -> List[Dict]:
 
     return resources
 
-def extract_zaphiris_documents() -> List[Dict]:
-    """Extract documents from Dr. Zaphiris folder."""
-    resources = []
-    zaphiris_dir = os.path.join(MEDICAL_DIR, "Dr Zaphiris/")
+def extract_external_provider_documents() -> List[Dict]:
+    """Extract PDFs from an external provider folder.
 
-    if not os.path.exists(zaphiris_dir):
+    Directory is configurable via the EXTERNAL_PROVIDER_DIR environment
+    variable (defaults to ``$MEDICAL_DIR/External Provider/``). Lets
+    patient-specific folder names stay out of source.
+    """
+    resources = []
+    provider_dir = os.environ.get(
+        'EXTERNAL_PROVIDER_DIR',
+        os.path.join(MEDICAL_DIR, "External Provider/"),
+    )
+    provider_label = os.environ.get('EXTERNAL_PROVIDER_LABEL', 'External Provider')
+
+    if not os.path.exists(provider_dir):
         return resources
 
-    print(f"\nProcessing Dr. Zaphiris folder...")
+    print(f"\nProcessing external-provider folder: {provider_dir}")
 
     try:
-        pdf_files = [f for f in os.listdir(zaphiris_dir) if f.endswith('.pdf') or f.endswith('.PDF')]
+        pdf_files = [f for f in os.listdir(provider_dir) if f.endswith('.pdf') or f.endswith('.PDF')]
         print(f"  Found {len(pdf_files)} PDF files")
 
         for pdf_file in pdf_files[:5]:  # Sample first 5
-            doc_id = f"doc-zaphiris-{pdf_file.replace('.pdf', '').replace('.PDF', '')}"
+            doc_id = f"doc-external-{pdf_file.replace('.pdf', '').replace('.PDF', '')}"
             doc = create_document_reference(
                 doc_id=doc_id,
-                title=f"Dr. Zaphiris Document: {pdf_file}",
+                title=f"{provider_label} Document: {pdf_file}",
                 doc_type="Consultation Note",
                 date="2026-01-01",
-                source="Dr. Zaphiris",
+                source=provider_label,
                 content_type="application/pdf"
             )
             resources.append(doc)
 
-        print(f"  Created {len(resources)} DocumentReference resources from Zaphiris folder")
+        print(f"  Created {len(resources)} DocumentReference resources from external-provider folder")
     except Exception as e:
-        print(f"  Error processing Zaphiris folder: {e}")
+        print(f"  Error processing external-provider folder: {e}")
 
     return resources
 
@@ -351,7 +360,7 @@ def extract_sciencedirect_articles() -> List[Dict]:
                         "display": "Discharge Summary"
                     }]
                 },
-                "subject": {"reference": "Patient/patient-uri-sarid"},
+                "subject": {"reference": "Patient/patient-primary"},
                 "date": "2025-12-13",
                 "description": f"Research Article: {pdf_file}",
                 "content": [{
@@ -392,8 +401,8 @@ def main():
     imaging_docs = extract_imaging_metadata()
     all_resources.extend(imaging_docs)
 
-    zaphiris_docs = extract_zaphiris_documents()
-    all_resources.extend(zaphiris_docs)
+    external_provider_docs = extract_external_provider_documents()
+    all_resources.extend(external_provider_docs)
 
     sciencedirect_docs = extract_sciencedirect_articles()
     all_resources.extend(sciencedirect_docs)
@@ -443,7 +452,7 @@ def main():
             "mskcc_documents": len(mskcc_docs),
             "apple_cda_vitals": len(cda_vitals),
             "imaging_documents": len(imaging_docs),
-            "zaphiris_documents": len(zaphiris_docs),
+            "external_provider_documents": len(external_provider_docs),
             "sciencedirect_articles": len(sciencedirect_docs)
         }
     }

@@ -94,7 +94,7 @@
 | Setting | Recommendation |
 |---------|---|
 | **App Name** | "PersonalHealthVault", "MyEHR", "HealthBridge" (keep simple, patient-friendly) |
-| **Contact Email** | Your personal Epic account email (Uri's email) |
+| **Contact Email** | Your personal Epic account email |
 | **Redirect URI (Dev)** | `http://localhost:3000/callback` (start here for testing) |
 | **Redirect URI (Staging)** | `https://staging.yourapp.com/callback` |
 | **Redirect URI (Prod)** | `https://yourapp.com/callback` (HTTPS mandatory) |
@@ -250,7 +250,7 @@ You'll get the exact URL from Epic's endpoints list or directly from the health 
 
 ---
 
-## 9. Timeline for Uri
+## 9. Recommended Timeline
 
 **Today (NOW)**:
 - [ ] Register at https://fhir.epic.com (5 min)

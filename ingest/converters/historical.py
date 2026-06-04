@@ -3,11 +3,11 @@
 Generate FHIR R4 transaction bundles for historical PDF-based medical records (2012-2017, 2023).
 
 Sources:
-  1. 2012 Sutter East Bay (Nov 5, 2012) - Dr Amy B Levin: CBC, CMP, Celiac, H.pylori, TSH, Amylase, Lipase, ESR, Urinalysis
-  2. 2013 Sutter (Jan 24, 2013) - Dr Frank Fazzolari: Lipid Profile, CT Abdomen/Pelvis
-  3. 2016 LabCorp (Apr 19, 2016) - One Medical / Tercero S: CMP, Lipids, HbA1c, PSA, CV Report
-  4. 2017 LabCorp (Jul 20, 2017) - Functional Medicine SF / S Daniel: massive panel (50+ components)
-  5. 2017 SIBO Center (Aug 12, 2017) - Dr Stephanie Daniel: SIBO Breath Test (triple positive)
+  1. 2012 Sutter East Bay (Nov 5, 2012) - Dr Provider A: CBC, CMP, Celiac, H.pylori, TSH, Amylase, Lipase, ESR, Urinalysis
+  2. 2013 Sutter (Jan 24, 2013) - Provider B: Lipid Profile, CT Abdomen/Pelvis
+  3. 2016 LabCorp (Apr 19, 2016) - One Medical / Provider D: CMP, Lipids, HbA1c, PSA, CV Report
+  4. 2017 LabCorp (Jul 20, 2017) - Functional Medicine SF / Provider E: massive panel (50+ components)
+  5. 2017 SIBO Center (Aug 12, 2017) - Provider E: SIBO Breath Test (triple positive)
   6. 2017 Doctor's Data (Jul 12, 2017) - Comprehensive Stool Analysis/Parasitology x3
   7. 2017 VCS APTitude Screening (Nov 5, 2017) - Visual Contrast Sensitivity test (Fail)
   8. 2023 UCSF/MarinHealth (May 24, 2023) - MR Cervical Spine
@@ -127,13 +127,13 @@ def diagnostic_report(dr_id_prefix, order_id, date, code_text, narrative_text,
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 1. 2012 Sutter East Bay - Dr Amy B Levin (Nov 5, 2012)
+# 1. 2012 Sutter East Bay - Dr Provider A (Nov 5, 2012)
 # ──────────────────────────────────────────────────────────────────────
 
 def create_2012_sutter_cbc():
     date = "2012-11-05"
     order = "sutter-2012-cbc"
-    perf = "Sutter East Bay / Amy B Levin, MD"
+    perf = "Sutter East Bay / Provider A, MD"
     idsys = "urn:sutter:order"
     components = [
         ("WBC", 7.6, "K/uL", "3.8-10.8", None, "6690-2"),
@@ -158,14 +158,14 @@ def create_2012_sutter_cbc():
     ]
     obs_entries = [obs("sutter2012-cbc", order, date, c[0], c[1], c[2], c[3], c[4], c[5], performer_name=perf, identifier_system=idsys) for c in components]
     return diagnostic_report("sutter2012-dr-cbc", order, date, "CBC with Differential",
-        "CBC with Differential - Sutter East Bay, Nov 5, 2012. Ordered by Amy B Levin, MD. All values within normal limits.",
+        "CBC with Differential - Sutter East Bay, Nov 5, 2012. Ordered by Provider A, MD. All values within normal limits.",
         performer_name=perf, identifier_system=idsys, observation_entries=obs_entries, loinc_code="58410-2", loinc_display="CBC panel with Differential")
 
 
 def create_2012_sutter_cmp():
     date = "2012-11-05"
     order = "sutter-2012-cmp"
-    perf = "Sutter East Bay / Amy B Levin, MD"
+    perf = "Sutter East Bay / Provider A, MD"
     idsys = "urn:sutter:order"
     components = [
         ("Sodium", 144, "mmol/L", "136-145", None, "2951-2"),
@@ -186,14 +186,14 @@ def create_2012_sutter_cmp():
     ]
     obs_entries = [obs("sutter2012-cmp", order, date, c[0], c[1], c[2], c[3], c[4], c[5], performer_name=perf, identifier_system=idsys) for c in components]
     return diagnostic_report("sutter2012-dr-cmp", order, date, "Comprehensive Metabolic Panel",
-        "CMP - Sutter East Bay, Nov 5, 2012. Ordered by Amy B Levin, MD. All values within normal limits.",
+        "CMP - Sutter East Bay, Nov 5, 2012. Ordered by Provider A, MD. All values within normal limits.",
         performer_name=perf, identifier_system=idsys, observation_entries=obs_entries, loinc_code="24323-8", loinc_display="Comprehensive metabolic panel")
 
 
 def create_2012_sutter_celiac():
     date = "2012-11-05"
     order = "sutter-2012-celiac"
-    perf = "Sutter East Bay / Amy B Levin, MD"
+    perf = "Sutter East Bay / Provider A, MD"
     idsys = "urn:sutter:order"
     components = [
         ("TTG Ab IgA", 0.7, "U/mL", "<5 Negative", None, "31017-7"),
@@ -210,7 +210,7 @@ def create_2012_sutter_misc():
     """H.pylori, TSH, Amylase, Lipase, ESR as individual observations under one DR."""
     date = "2012-11-05"
     order = "sutter-2012-misc"
-    perf = "Sutter East Bay / Amy B Levin, MD"
+    perf = "Sutter East Bay / Provider A, MD"
     idsys = "urn:sutter:order"
     components = [
         ("H. pylori Ab", 0.4, "U/mL", "<0.75 Negative", None, "5182-1"),
@@ -228,7 +228,7 @@ def create_2012_sutter_misc():
 def create_2012_sutter_urinalysis():
     date = "2012-11-05"
     order = "sutter-2012-ua"
-    perf = "Sutter East Bay / Amy B Levin, MD"
+    perf = "Sutter East Bay / Provider A, MD"
     idsys = "urn:sutter:order"
     components = [
         ("UA Color", None, None, None, None, "5778-6", None, "Yellow"),
@@ -255,13 +255,13 @@ def create_2012_sutter_urinalysis():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 2. 2013 Sutter - Dr Frank Fazzolari (Jan 24, 2013)
+# 2. 2013 Sutter - Provider B (Jan 24, 2013)
 # ──────────────────────────────────────────────────────────────────────
 
 def create_2013_sutter_lipids():
     date = "2013-01-24"
     order = "sutter-2013-lipid"
-    perf = "Sutter / Frank Anthony Fazzolari, MD"
+    perf = "Sutter / Provider B, MD"
     idsys = "urn:sutter:order"
     components = [
         ("Total Cholesterol", 205, "mg/dL", "<200", "H", "2093-3"),
@@ -280,10 +280,10 @@ def create_2013_sutter_lipids():
 def create_2013_sutter_ct():
     date = "2013-01-24"
     order = "sutter-2013-ct-abd"
-    perf = "Sutter / Recha S Bergstrom, MD"
+    perf = "Sutter / Provider C, MD"
     narrative = """CT Abdomen and Pelvis with Contrast - Sutter, Jan 24, 2013
-Ordering Provider: Frank Anthony Fazzolari, MD
-Radiologist: Recha S Bergstrom, MD
+Ordering Provider: Provider B, MD
+Radiologist: Provider C, MD
 
 Indication: Intermittent dyspepsia with 20 lb weight loss.
 
@@ -307,13 +307,13 @@ Impression:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 3. 2016 LabCorp - One Medical / Tercero S (Apr 19, 2016)
+# 3. 2016 LabCorp - One Medical / Provider D (Apr 19, 2016)
 # ──────────────────────────────────────────────────────────────────────
 
 def create_2016_labcorp_cmp():
     date = "2016-04-19"
     order = "11047772990"
-    perf = "LabCorp / One Medical - Tercero S"
+    perf = "LabCorp / One Medical - Provider D"
     idsys = "urn:labcorp:specimen"
     components = [
         ("Glucose", 96, "mg/dL", "65-99", None, "2345-7"),
@@ -337,14 +337,14 @@ def create_2016_labcorp_cmp():
     ]
     obs_entries = [obs("labcorp2016-cmp", order, date, c[0], c[1], c[2], c[3], c[4], c[5], performer_name=perf, identifier_system=idsys) for c in components]
     return diagnostic_report("labcorp2016-dr-cmp", order, date, "Comprehensive Metabolic Panel",
-        "CMP - LabCorp, Apr 19, 2016. Specimen 11047772990. Ordered by One Medical / Tercero S. All values within normal limits.",
+        "CMP - LabCorp, Apr 19, 2016. Specimen 11047772990. Ordered by One Medical / Provider D. All values within normal limits.",
         performer_name=perf, identifier_system=idsys, observation_entries=obs_entries, loinc_code="24323-8")
 
 
 def create_2016_labcorp_lipids():
     date = "2016-04-19"
     order = "11047772990-lipid"
-    perf = "LabCorp / One Medical - Tercero S"
+    perf = "LabCorp / One Medical - Provider D"
     idsys = "urn:labcorp:specimen"
     components = [
         ("Total Cholesterol", 204, "mg/dL", "100-199", "H", "2093-3"),
@@ -364,7 +364,7 @@ def create_2016_labcorp_lipids():
 def create_2016_labcorp_hba1c_psa():
     date = "2016-04-19"
     order = "11047772990-misc"
-    perf = "LabCorp / One Medical - Tercero S"
+    perf = "LabCorp / One Medical - Provider D"
     idsys = "urn:labcorp:specimen"
     components = [
         ("Hemoglobin A1c", 5.8, "%", "4.8-5.6", "H", "4548-4"),
@@ -378,13 +378,13 @@ def create_2016_labcorp_hba1c_psa():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 4. 2017 LabCorp - Functional Medicine SF / S Daniel (Jul 20, 2017)
+# 4. 2017 LabCorp - Functional Medicine SF / Provider E (Jul 20, 2017)
 # ──────────────────────────────────────────────────────────────────────
 
 def create_2017_labcorp_cbc():
     date = "2017-07-20"
     order = "201-477-7423-0"
-    perf = "LabCorp / Functional Medicine SF - S Daniel"
+    perf = "LabCorp / Functional Medicine SF - Provider E"
     idsys = "urn:labcorp:specimen"
     components = [
         ("WBC", 6.5, "K/uL", "3.4-10.8", None, "6690-2"),
@@ -406,7 +406,7 @@ def create_2017_labcorp_cbc():
 def create_2017_labcorp_cmp():
     date = "2017-07-20"
     order = "201-477-7423-0-cmp"
-    perf = "LabCorp / Functional Medicine SF - S Daniel"
+    perf = "LabCorp / Functional Medicine SF - Provider E"
     idsys = "urn:labcorp:specimen"
     components = [
         ("Glucose", 84, "mg/dL", "65-99", None, "2345-7"),
@@ -437,7 +437,7 @@ def create_2017_labcorp_cmp():
 def create_2017_labcorp_lipids():
     date = "2017-07-20"
     order = "201-477-7423-0-lipid"
-    perf = "LabCorp / Functional Medicine SF - S Daniel"
+    perf = "LabCorp / Functional Medicine SF - Provider E"
     idsys = "urn:labcorp:specimen"
     components = [
         ("Total Cholesterol", 162, "mg/dL", "100-199", None, "2093-3"),
@@ -457,7 +457,7 @@ def create_2017_labcorp_lipids():
 def create_2017_labcorp_hormones():
     date = "2017-07-20"
     order = "201-477-7423-0-horm"
-    perf = "LabCorp / Functional Medicine SF - S Daniel"
+    perf = "LabCorp / Functional Medicine SF - Provider E"
     idsys = "urn:labcorp:specimen"
     components = [
         ("SHBG", 42.1, "nmol/L", "16.5-55.9", None, "13967-5"),
@@ -478,7 +478,7 @@ def create_2017_labcorp_hormones():
 def create_2017_labcorp_thyroid():
     date = "2017-07-20"
     order = "201-477-7423-0-thyroid"
-    perf = "LabCorp / Functional Medicine SF - S Daniel"
+    perf = "LabCorp / Functional Medicine SF - Provider E"
     idsys = "urn:labcorp:specimen"
     components = [
         ("TSH", 3.160, "uIU/mL", "0.450-4.500", None, "3016-3"),
@@ -495,7 +495,7 @@ def create_2017_labcorp_specialty():
     """HNK1/CD57, B12, Folate, PSA/Free, CRP, Homocysteine, VitD, CoQ10, Zinc, MMA."""
     date = "2017-07-20"
     order = "201-477-7423-0-spec"
-    perf = "LabCorp / Functional Medicine SF - S Daniel"
+    perf = "LabCorp / Functional Medicine SF - Provider E"
     idsys = "urn:labcorp:specimen"
     components = [
         ("HNK1 (CD57) %CD8-/CD57+", 2.3, "%", None, None, "9246-0"),
@@ -520,13 +520,13 @@ def create_2017_labcorp_specialty():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# 5. 2017 SIBO Center - Dr Stephanie Daniel (Aug 12, 2017)
+# 5. 2017 SIBO Center - Provider E (Aug 12, 2017)
 # ──────────────────────────────────────────────────────────────────────
 
 def create_2017_sibo():
     date = "2017-08-12"
     order = "sibo-center-2017"
-    perf = "SIBO Center / Stephanie Daniel"
+    perf = "SIBO Center / Provider E"
     idsys = "urn:sibocenter:order"
 
     time_points = [
@@ -550,7 +550,7 @@ def create_2017_sibo():
     obs_entries.append(obs("sibo2017-sum", order, date, "Greatest combined H2+CH4", 47, "ppm", "<=15", "H", performer_name=perf, identifier_system=idsys))
 
     narrative = """SIBO Breath Test - SIBO Center, Aug 12, 2017
-Provider: Stephanie Daniel
+Provider: Provider E
 
 10 time points (Baseline through 180 min):
 H2: 2, 3, 2, 1, 2, 16, 29, 29, 29, 45
@@ -643,7 +643,7 @@ def create_2017_stool_analysis():
 
     narrative = """Comprehensive Stool Analysis / Parasitology x3 - Doctor's Data, Inc.
 Lab #: F170714-0127-1. Collected: 07/12/2017. Reported: 07/31/2017.
-Doctor: Stephanie Daniel, DO / Functional Medicine SF.
+Doctor: Provider E, DO / Functional Medicine SF.
 
 BACTERIOLOGY: Bacteroides fragilis 3+, Bifidobacterium NG, E.coli NG, Lactobacillus 1+, Enterococcus NG, Clostridium 3+. Commensal: Hemolytic E.coli 2+. No dysbiotic flora. No yeast isolated.
 
