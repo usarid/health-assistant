@@ -44,3 +44,10 @@ certs/
 
 # Migration backups (large, contain personal data)
 tmp/
+
+# ── v2 rebuild ──
+# Generated bundles + diff reports contain PHI from raw exports
+tools/v2/out/
+# Patient-specific config (clinician→org mappings) — committed only as .example
+tools/v2/patient_config/org_mapping.json
+tools/v2/patient_config/patient_identity.json
