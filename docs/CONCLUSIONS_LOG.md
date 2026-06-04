@@ -70,6 +70,7 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-010 | n1-observed | MyChart linked-accounts connections expire silently over time — historical data persists in receiving portal, new data stops flowing, reconnection is user-initiated and unprompted | 2026-05-31 |
 | C-011 | confirmed | v1 production silently lost ~80% of MSKCC message content by loading from preview-only file instead of full-nested-message file | 2026-06-04 |
 | C-012 | confirmed | v1 production discards ~17% of clinical note text by stripping HTML to plaintext before storage; v2 preserves HTML and recovers the structural content | 2026-06-04 |
+| C-013 | confirmed | Stanford visits ingestion was complete in v1 — no data-loss bug analogous to C-011/C-012; the v1 converter captured CSN and core fields cleanly. v2 adds provenance tags and preserves the previously-dropped `_orgKey` (Stanford organisation token) and IsLocal flag | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
@@ -327,6 +328,23 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
   - Patient-canonical identity (C-005) must be resolved first so references point to the right patient's resources.
   - DocumentReference Binary content must be reliably retrievable (a separate problem flagged in the audit).
 - **Re-evaluation trigger:** Once Phase F (extend v2 to DocumentReference and Observation) lands and we have a substantial cross-source corpus to test against.
+
+---
+
+### C-013 — Stanford visits ingestion has no v1 data-loss bug; minor v2 enrichments
+
+- **Status:** `confirmed` (2026-06-04)
+- **Claim:** Unlike C-011 (messages) and C-012 (notes), v1's Stanford visits ingestion is essentially complete. All 139 raw visits map cleanly to v1 Encounters by CSN, and the v1 converter preserves the core clinical fields (visit type, period, provider, service department). v2 reproduces the same 139 Encounters with:
+  - Added provenance tags (source-portal, source-org, source-org-id, source-file, scraper-version, converter-version).
+  - Preservation of the `_orgKey` WP-24 token from the raw scrape (carried as `urn:bina:source-org-id` tag) — previously dropped in v1.
+  - Preservation of IsLocal + clinical-note-available + cancelled + no-show + ED + surgery flags as `urn:bina:encounter-flag` tags. Per C-001/C-004 the IsLocal flag is meaningful for cross-institution attribution; all 139 Stanford visits are IsLocal=true, consistent with C-004.
+  - Canonical Epic encounter identifier (`urn:bina:epic:encounter`) duplicated alongside the portal-local identifier, in anticipation of cross-portal dedup (H-001 carried over to encounters).
+- **Methodology note** (worth remembering for other resource types): FHIR R4 `Encounter` has no `note` field. HAPI silently drops unknown fields during ingest. v2's first cut emitted Encounter with `note` and lost the IsLocal text until a verification query against v2 HAPI surfaced 0/139 notes populated. Fix: use `meta.tag` for boolean flags on resource types that don't model free-text notes. This is the v2-converter-side cost of P-DATA-IS-GOLD — always validate that what the converter emits actually round-trips through HAPI.
+- **Evidence:** v1↔v2 diff 2026-06-04. v1 has 139 Stanford Encounters tagged `stanford-myhealth-visits`; v2 has 139 tagged `urn:bina:source-org|Stanford`. 100% CSN intersection. v2 tag distribution: 139 is-local, 105 clinical-note-available, 2 surgery (matches expected from raw).
+- **Patients in sample:** 1
+- **Confidence:** High.
+- **Generalization risk:** Stanford visits handled well in v1 doesn't mean Stanford test results / UCSF visits / etc. will be. The next conversion (Stanford test results) is the relevant next data point.
+- **Re-evaluation trigger:** When v2 expands to other resource types or to patient N+1.
 
 ---
 
