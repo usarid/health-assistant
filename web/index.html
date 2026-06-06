@@ -1017,15 +1017,32 @@
       padding-bottom: calc(64px + env(safe-area-inset-bottom));
     }
 
-    /* ── Tab nav fixed at the bottom (brand stays at top, see below) ── */
+    /* ── Tab nav fixed at the bottom (brand stays at top, see below) ──
+       Horizontal padding: max(12px, safe-area-inset-*) keeps the leftmost
+       (Home) and rightmost (Me) tab labels away from the iPhone's curved
+       display corners. env(safe-area-inset-left/right) is 0 in portrait
+       but non-zero in landscape with the notch on one side — max() covers
+       both. */
     nav {
       position: fixed; bottom: 0; left: 0; right: 0; top: auto;
-      padding: 0 0 env(safe-area-inset-bottom) 0;
+      padding: 0 max(12px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(12px, env(safe-area-inset-left));
       gap: 0;
       border-top: 1px solid #e5e7eb;
       border-bottom: none;
       box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
       z-index: 100;
+    }
+
+    /* ── Dataset badge moves to the top brand bar on mobile ──
+       Otherwise it would render as the leftmost item in the bottom tab
+       nav and get clipped by the curved display corner. It's a system
+       status indicator (v1/v2/?), not a navigation tab, so the top brand
+       bar (alongside Logout) is the semantically right home. */
+    nav .dataset-badge {
+      position: fixed;
+      top: 12px;
+      right: 72px;        /* leaves room for the Logout button at right: 12px */
+      z-index: 101;
     }
 
     /* ── Brand bar pinned to the top of the viewport (escapes the nav's fixed
