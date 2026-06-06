@@ -200,7 +200,10 @@ hapi:
     enforce_referential_integrity_on_write: false
     #    etag_support_enabled: true
     #    expunge_enabled: true
-    #    client_id_strategy: ALPHANUMERIC
+    # ANY accepts pure-numeric IDs (e.g. v1's "102219") in addition to alphanumeric.
+    # Necessary so the bulk v1 → v2 copy can preserve v1's IDs verbatim, including
+    # the numeric ones HAPI's default ALPHANUMERIC policy would reject (HAPI-0960).
+    client_id_strategy: ANY
     #    server_id_strategy: SEQUENTIAL_NUMERIC
     #    fhirpath_interceptor_enabled: false
     #    filter_search_enabled: true
