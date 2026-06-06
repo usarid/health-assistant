@@ -142,9 +142,20 @@ services:
       - "127.0.0.1:3000:443"    # Loopback HTTPS (https://localhost:3000)
       - "127.0.0.1:3080:80"     # HTTP for Cloudflare Tunnel (cloudflared -> localhost:3080)
       - "443:443"               # LAN HTTPS (https://bina.saridium.com from any device on home wifi)
+    environment:
+      # Which HAPI host nginx routes /fhir/* to. Default 'hapi' (v1 stack).
+      # docker-compose.app-v2.yml overrides this to 'hapi-v2' so the frontend's
+      # direct /fhir/* calls land on the same dataset the api container sees.
+      HAPI_FHIR_HOST: hapi
+      # envsubst-on-templates filter: only substitute HAPI_FHIR_HOST, leave
+      # nginx's own $host / $remote_addr / etc. references alone.
+      NGINX_ENVSUBST_FILTER: "^HAPI_FHIR_HOST$$"
     volumes:
       - ./web:/usr/share/nginx/html:ro
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # The nginx:alpine image processes /etc/nginx/templates/*.template files
+      # with envsubst at container start, writing the result to
+      # /etc/nginx/conf.d/. So this gives us a HAPI_FHIR_HOST-aware config.
+      - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ./certs:/etc/nginx/certs:ro
       - ./data/pillbox/images_nobg:/usr/share/pillbox-images:ro   # Background-removed PNGs served at /pillbox-images/*.png
       - ./data/pillbox/user_photos:/usr/share/pillbox-user-photos:ro   # User-uploaded pill cutouts served at /user-pill-photos/*.png

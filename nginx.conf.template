@@ -81,7 +81,7 @@ server {
     # ── FHIR API (direct to HAPI for raw FHIR access) ─────────────────
     # Match both /fhir and /fhir/ (HAPI pagination uses /fhir?_getpages=...)
     location = /fhir {
-        proxy_pass http://hapi:8080/fhir;
+        proxy_pass http://${HAPI_FHIR_HOST}:8080/fhir;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 120s;
@@ -95,7 +95,7 @@ server {
     }
 
     location /fhir/ {
-        proxy_pass http://hapi:8080/fhir/;
+        proxy_pass http://${HAPI_FHIR_HOST}:8080/fhir/;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 120s;
