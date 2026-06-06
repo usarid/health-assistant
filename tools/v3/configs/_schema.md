@@ -18,7 +18,7 @@ Each portal gets one JSON config file. Top-level shape:
   "jobs": {
     "<job_name>": {
       "discovery": { /* see below */ },
-      "filter": null,                     // optional JS expr against item; e.g. "item.IsLocal === true"
+      "filter": null,                     // optional structured filter spec; see "Filter spec" section
       "endpoint": { /* see below */ },
       "depends_on": null,                 // optional; e.g. "visits" means use prior job's results
       "max_concurrency": 1,
@@ -35,12 +35,23 @@ Two modes are supported.
 ### `epic_rendered_data`
 
 Reads the work-list from Epic's SPA runtime state. Per-portal: which instance.
+Optionally drives a UI paginator before reading.
 
 ```jsonc
 "discovery": {
   "mode": "epic_rendered_data",
   "instance": 7,                          // Epic.PatientAccess.Components.__Instances[N].RenderedData
-  "path_in_state": null                   // optional; "instances[7].RenderedData" if Epic ever changes
+  "paginator": {                          // optional — set when the list paginates via a "Load more" button
+    "type": "click_until_gone",           // currently the only supported type
+    "button_text": "load more past visits",  // case-insensitive substring match on button text
+    "max_iterations": 50,                 // safety cap; default 50
+    "settle_ms": 200,                     // wait after each click before next iteration; default 200
+    "wait_for_growth_ms": 6000,           // wait this long for RenderedData to grow after a click; default 6000
+    "stop_when_seen": {                   // optional — for incremental scrapes
+      "path": "Csn",                      // path on a RenderedData item
+      "value": "PRIOR_HIGH_WATERMARK"     // stop paginating once any item matches
+    }
+  }
 }
 ```
 
@@ -62,6 +73,37 @@ For follow-up jobs: use the output of a previous job as input. Example: notes sc
 
 ```jsonc
 "discovery": { "mode": "from_dependency" }
+```
+
+## Filter spec
+
+Filters are structured JSON, evaluated by the runtime without `eval` or `new Function` (those are CSP-blocked on most real portals, see 2026-06-06 UCSF live-test findings). Accepted shapes:
+
+```jsonc
+null | true                        // accept all (no filter)
+false                              // reject all
+"a.b.c"                            // shorthand: path must be truthy
+[spec, spec, …]                    // implicit AND
+{ "and": [spec, spec, …] }
+{ "or":  [spec, spec, …] }
+{ "not": spec }
+{ "path_truthy": "a.b.c" }
+{ "path_equals": ["a.b.c", value] }
+```
+
+Paths are dotted; `getPath` is null-tolerant (no exception on missing intermediates). The match value in `path_equals` is compared with strict equality (`===`).
+
+Examples — see `ucsf.json` for working uses:
+
+```jsonc
+// All visits where IsLocal is exactly true
+{ "path_equals": ["IsLocal", true] }
+
+// Visits with a clinical note that the patient can view
+{ "and": [
+  { "path_equals": ["response.notesInfo.isAtLeastOneNoteShareable", true] },
+  "response.notesInfo.notesReport.reportID"     // truthy-shorthand
+]}
 ```
 
 ## Endpoint declaration

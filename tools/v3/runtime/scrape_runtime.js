@@ -5,6 +5,16 @@
  * declared jobs in dependency order. Returns structured results that the
  * Python converters in tools/v2/ already know how to consume.
  *
+ * Architecture notes (after 2026-06-06 UCSF live test):
+ *   - Filter spec is structured JSON ({and, or, not, path_truthy, path_equals})
+ *     evaluated by a small in-runtime interpreter. Earlier prototype used
+ *     `new Function()` to eval string expressions; that breaks under CSP when
+ *     a fetch has occurred earlier in the same async block (real-world
+ *     blocker found at UCSF). The structured form is CSP-safe.
+ *   - Discovery supports an optional paginator that clicks a "Load more"
+ *     button until exhausted (or a stop-when-seen item appears, for
+ *     incremental scrapes that stop at the previous high-watermark).
+ *
  * Usage (browser console, after logging into the portal):
  *
  *   const cfg = await (await fetch('/v3/configs/ucsf.json')).json();  // or paste inline
@@ -12,17 +22,20 @@
  *   const results = await runner.run(['visits', 'notes']);
  *   // results.visits = array of {item, response, _provenance}
  *   // results.notes  = array of {item, response, _provenance}
- *   copy(JSON.stringify(results));  // copy to clipboard for ingest
  *
  * Usage (mobile WebView): same pattern; the host app injects this script after
  * the user authenticates, calls run() with the appropriate job list, and
  * exfiltrates the results to the BinaHealth backend.
+ *
+ * Important: scraped content must NEVER traverse the AI conversation channel
+ * (P-PHI-STAYS-LOCAL in docs/CONCLUSIONS_LOG.md). Results flow browser →
+ * local file or browser → BinaHealth backend, not browser → AI.
  */
 
 (function (global) {
   'use strict';
 
-  const RUNTIME_VERSION = 'v3.0.0';
+  const RUNTIME_VERSION = 'v3.1.0';
 
   // ── Auth ─────────────────────────────────────────────────────────────
   function extractToken(authCfg) {
@@ -37,8 +50,93 @@
     return m ? m[1] || m[0] : null;
   }
 
+  // ── Path lookup (null-tolerant) ──────────────────────────────────────
+  function getPath(obj, path) {
+    if (path == null) return undefined;
+    const parts = String(path).split('.');
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return undefined;
+      cur = cur[p];
+    }
+    return cur;
+  }
+
+  // ── Filter spec evaluator (CSP-safe; no new Function / no eval) ─────
+  // Accepted spec shapes:
+  //   null | true      → accept all
+  //   false            → reject all
+  //   "a.b.c"          → path must be truthy
+  //   [spec, spec, …]  → implicit AND
+  //   { and: [...] }
+  //   { or:  [...] }
+  //   { not: spec }
+  //   { path_truthy: "a.b.c" }
+  //   { path_equals: ["a.b.c", value] }
+  function evalFilter(spec, item) {
+    if (spec == null || spec === true) return true;
+    if (spec === false) return false;
+    if (typeof spec === 'string') return !!getPath(item, spec);
+    if (Array.isArray(spec)) return spec.every(s => evalFilter(s, item));
+    if (typeof spec === 'object') {
+      if ('and' in spec) return (spec.and || []).every(s => evalFilter(s, item));
+      if ('or' in spec) return (spec.or || []).some(s => evalFilter(s, item));
+      if ('not' in spec) return !evalFilter(spec.not, item);
+      if ('path_truthy' in spec) return !!getPath(item, spec.path_truthy);
+      if ('path_equals' in spec) {
+        const [p, v] = spec.path_equals;
+        return getPath(item, p) === v;
+      }
+    }
+    console.warn('[v3 runtime] unknown filter spec', spec);
+    return false;
+  }
+
+  // ── Paginator (for portals where the work-list paginates via UI) ─────
+  function findButtonByText(text) {
+    const needle = String(text).toLowerCase();
+    return Array.from(document.querySelectorAll('a, button'))
+      .find(el => el.textContent && el.textContent.trim().toLowerCase().includes(needle));
+  }
+
+  async function runPaginator(pagCfg, getRD, opts) {
+    if (!pagCfg) return;
+    const maxIters = pagCfg.max_iterations || 50;
+    const settleMs = pagCfg.settle_ms || 200;
+    const waitGrowMs = pagCfg.wait_for_growth_ms || 6000;
+    if (pagCfg.type === 'click_until_gone') {
+      for (let i = 0; i < maxIters; i++) {
+        // Optional early stop for incremental scrapes
+        if (pagCfg.stop_when_seen) {
+          const rd = getRD();
+          const hit = rd.some(item => getPath(item, pagCfg.stop_when_seen.path) === pagCfg.stop_when_seen.value);
+          if (hit) {
+            opts.log(`[paginator] stop_when_seen hit after ${i} clicks (${rd.length} items)`);
+            return;
+          }
+        }
+        const btn = findButtonByText(pagCfg.button_text);
+        if (!btn) {
+          opts.log(`[paginator] button-gone after ${i} clicks (${getRD().length} items)`);
+          return;
+        }
+        const before = getRD().length;
+        btn.click();
+        const start = Date.now();
+        while (Date.now() - start < waitGrowMs) {
+          await sleep(300);
+          if (getRD().length > before) break;
+        }
+        await sleep(settleMs);
+      }
+      opts.log(`[paginator] max-iterations cap reached (${maxIters})`);
+    } else {
+      opts.log(`[paginator] unknown type: ${pagCfg.type}`);
+    }
+  }
+
   // ── Discovery ────────────────────────────────────────────────────────
-  function discoverEpicRenderedData(discCfg) {
+  async function discoverEpicRenderedData(discCfg, opts) {
     const inst = (global.Epic
       && global.Epic.PatientAccess
       && global.Epic.PatientAccess.Components
@@ -46,6 +144,9 @@
       && global.Epic.PatientAccess.Components.__Instances[discCfg.instance]);
     if (!inst || !inst.RenderedData) {
       throw new Error(`No RenderedData at instance ${discCfg.instance}`);
+    }
+    if (discCfg.paginator) {
+      await runPaginator(discCfg.paginator, () => inst.RenderedData, opts);
     }
     return inst.RenderedData.slice();
   }
@@ -71,18 +172,6 @@
     return out;
   }
 
-  // ── Filter evaluation ────────────────────────────────────────────────
-  function evalFilter(expr, item) {
-    if (!expr) return true;
-    try {
-      // eslint-disable-next-line no-new-func
-      return new Function('item', `return (${expr});`)(item);
-    } catch (e) {
-      console.warn('[v3 runtime] filter eval failed:', e, expr);
-      return false;
-    }
-  }
-
   // ── Template resolution ──────────────────────────────────────────────
   function genNonce() {
     const bytes = new Uint8Array(16);
@@ -94,30 +183,18 @@
     // dotted path; supports '?' suffix on final segment for missing-ok
     const optional = path.endsWith('?');
     const clean = optional ? path.slice(0, -1) : path;
-    const parts = clean.split('.');
-    let cur = item;
-    for (const p of parts) {
-      if (cur == null) {
-        if (optional) return '';
-        throw new Error(`Item path missing: ${path}`);
-      }
-      cur = cur[p];
-    }
-    if (cur === undefined) {
+    const v = getPath(item, clean);
+    if (v === undefined) {
       if (optional) return '';
-      throw new Error(`Item path resolved to undefined: ${path}`);
+      throw new Error(`Item path missing or undefined: ${path}`);
     }
-    return cur;
+    return v;
   }
 
   function resolveTemplate(tpl, ctx) {
     if (typeof tpl === 'string') {
-      // Whole-string template ("{item.X}") returns the raw value (preserves type)
       const whole = tpl.match(/^\{(.+)\}$/);
-      if (whole) {
-        return resolveToken(whole[1], ctx);
-      }
-      // Interpolated string
+      if (whole) return resolveToken(whole[1], ctx);
       return tpl.replace(/\{([^}]+)\}/g, (_, tok) => String(resolveToken(tok, ctx)));
     }
     if (Array.isArray(tpl)) return tpl.map(v => resolveTemplate(v, ctx));
@@ -166,7 +243,6 @@
     return { status: resp.status, ok: resp.ok, body: parsed };
   }
 
-  // ── Sleep + concurrency ──────────────────────────────────────────────
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   // ── Job execution ────────────────────────────────────────────────────
@@ -174,10 +250,9 @@
     const jobCfg = portalCfg.jobs[jobName];
     if (!jobCfg) throw new Error(`Unknown job: ${jobName}`);
 
-    // 1. Discover the work-list
     let workItems;
     if (jobCfg.discovery.mode === 'epic_rendered_data') {
-      workItems = discoverEpicRenderedData(jobCfg.discovery);
+      workItems = await discoverEpicRenderedData(jobCfg.discovery, opts);
     } else if (jobCfg.discovery.mode === 'dom_href_scan') {
       workItems = discoverDomHrefScan(jobCfg.discovery);
     } else if (jobCfg.discovery.mode === 'from_dependency') {
@@ -189,14 +264,12 @@
     }
     opts.log(`[${jobName}] discovered ${workItems.length} items`);
 
-    // 2. Filter
     if (jobCfg.filter) {
       const before = workItems.length;
       workItems = workItems.filter(item => evalFilter(jobCfg.filter, item));
       opts.log(`[${jobName}] filtered to ${workItems.length} (was ${before})`);
     }
 
-    // 3. Iterate, call endpoint per item
     const results = [];
     let seq = 0;
     const ctx = { bumpSeq: () => ++seq };

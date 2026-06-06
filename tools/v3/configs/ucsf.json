@@ -1,11 +1,11 @@
 {
-  "_comment": "Reference v3 config for UCSF MyChart. Behaviour is equivalent to running ingest/scrapers/scrape_ucsf_visits.js followed by scrape_ucsf_notes.js. See tools/v3/configs/_schema.md for the schema spec.",
+  "_comment": "Reference v3 config for UCSF MyChart. Validated end-to-end against the live portal on 2026-06-06. See tools/v3/configs/_schema.md for the schema spec.",
 
   "portal_id": "ucsf.mychart",
   "name": "UCSF MyChart",
   "base_path": "/UCSFMyChart",
-  "host_match": ["mychart.ucsf.edu"],
-  "config_version": "ucsf.v1",
+  "host_match": ["ucsfmychart.ucsfmedicalcenter.org", "mychart.ucsf.edu"],
+  "config_version": "ucsf.v1.2",
 
   "auth": {
     "token_selector": "input[name=\"__RequestVerificationToken\"]",
@@ -15,11 +15,19 @@
 
   "jobs": {
     "visits": {
+      "_comment": "Discovers visits from Epic SPA instance 7's RenderedData. The Visits page paginates via a 'Load more past visits' button; the paginator clicks it until the button disappears (full history) or stop_when_seen matches an item (incremental).",
       "discovery": {
         "mode": "epic_rendered_data",
-        "instance": 7
+        "instance": 7,
+        "paginator": {
+          "type": "click_until_gone",
+          "button_text": "load more past visits",
+          "max_iterations": 50,
+          "settle_ms": 200,
+          "wait_for_growth_ms": 6000
+        }
       },
-      "filter": "item.IsLocal === true",
+      "filter": { "path_equals": ["IsLocal", true] },
       "endpoint": {
         "path": "/api/visits/past-details/GetVisitDetailsPast",
         "method": "POST",
@@ -29,27 +37,33 @@
         }
       },
       "max_concurrency": 1,
-      "rate_limit_ms": 200
+      "rate_limit_ms": 80
     },
 
     "notes": {
+      "_comment": "Iterates visits-results that have a shareable clinical note. Note that the raw API response is at item.response (no 'details' wrapper).",
       "depends_on": "visits",
       "discovery": { "mode": "from_dependency" },
-      "filter": "item.response.details && item.response.details.notesInfo && item.response.details.notesInfo.isAtLeastOneNoteShareable === true && item.response.details.notesInfo.notesReport && item.response.details.notesInfo.notesReport.reportID",
+      "filter": {
+        "and": [
+          { "path_equals": ["response.notesInfo.isAtLeastOneNoteShareable", true] },
+          "response.notesInfo.notesReport.reportID"
+        ]
+      },
       "endpoint": {
         "path": "/api/report-content/LoadReportContent",
         "method": "POST",
         "body_template": {
-          "reportMnemonic": "{item.response.details.notesInfo.notesReport.reportMnemonic}",
-          "reportID": "{item.response.details.notesInfo.notesReport.reportID}",
-          "csn": "{item.response.details.csn?}",
+          "reportMnemonic": "{item.response.notesInfo.notesReport.reportMnemonic}",
+          "reportID": "{item.response.notesInfo.notesReport.reportID}",
+          "csn": "{item.response.csn?}",
           "isFullReportPage": false,
           "uniqueClass": "EID-{auto_seq}",
           "nonce": "{auto_nonce}"
         }
       },
       "max_concurrency": 1,
-      "rate_limit_ms": 200
+      "rate_limit_ms": 80
     }
   }
 }
