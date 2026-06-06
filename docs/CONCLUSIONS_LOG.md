@@ -74,6 +74,7 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-014 | confirmed | v1 stores medication name in `medicationReference.display` (731 of 739 MRs), not the FHIR-canonical `medicationCodeableConcept.text` (8 MRs) — entity-linking code must check both | 2026-06-04 |
 | C-015 | confirmed | Across 32 PMH-bearing UCSF notes, 9 unique diagnoses (incl. GERD 2002, Low back pain 2003, Bacterial overgrowth, Claudication, SVT) have no matching v1 Condition; after routing ANA-positive→Observation and Allergy→AllergyIntolerance, the true Condition gap is 7 | 2026-06-04 |
 | C-016 | confirmed | Vitals in clinical notes are 100% redundant with same-day Observations — perfect dedup target | 2026-06-04 |
+| C-017 | confirmed | AHR-ingested DocumentReferences across ALL institutions are metadata stubs — Binary URLs are populated but the Binary resources are not in HAPI. Stanford 224, UCSF AHR 284, Sutter 67, Mayo 14, MSKCC 10 — every sampled Binary failed to resolve | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
@@ -411,6 +412,31 @@ The core hypothesis works for medications. A note that includes a "Current Medic
 - **Confidence:** High.
 - **Generalization risk:** Stanford visits handled well in v1 doesn't mean Stanford test results / UCSF visits / etc. will be. The next conversion (Stanford test results) is the relevant next data point.
 - **Re-evaluation trigger:** When v2 expands to other resource types or to patient N+1.
+
+---
+
+### C-017 — AHR-ingested DocumentReferences across ALL institutions are metadata stubs (Binary content missing)
+
+- **Status:** `confirmed` (2026-06-04)
+- **Claim:** Across v1's full DocumentReference corpus (673 resources), the institutions with significant counts (Stanford 166, UCSF ~284 of 392, Sutter 67, Mayo 14, MSKCC 10) carry DocumentReferences whose `content[0].attachment.url` is a `Binary/<id>` reference — but the referenced Binary resources are not in HAPI. Sample test: 30 documents per institution, 0 of 30 Binary URLs resolved for Stanford, UCSF (AHR-sourced subset), Sutter, Mayo, or MSKCC. HAPI has only 133 Binary resources total, none of which match any sampled Binary ID. **The only DocumentReferences in v1 with usable inline content are the 108 UCSF clinical notes ingested via the direct UCSF scraper (`scrape_ucsf_notes.js`) and 2 patient-entered records — everything else is dead-link metadata.**
+- **Background:** CLAUDE.md notes this scraping limitation qualitatively for Stanford ("Stanford DocumentReferences exist but their Binary content was never ingested"). This entry generalises the finding: the pattern is the Apple Health Records ingestion pipeline. AHR captures DocumentReference metadata cleanly but doesn't follow through to fetch the Binary content the references point to.
+- **Why it matters:**
+  - **The clinical-narrative corpus available to the assistant is ~16% of what it appears to be.** 108 of 673 DocumentReferences have content (the UCSF-scraped notes). The other 565 are dead pointers. Any "search across my clinical notes" query is silently working with a 1-in-6 coverage slice.
+  - **The H-005 findings (C-015, C-016) are lower bounds.** They were measured against the 108 notes that have content. Adding the missing ~565 notes' worth of PMH dumps, allergy lists, and vital tables would likely surface significantly more unmatched diagnoses (C-015 gap could double or more).
+  - **The fix is patient-side.** AHR can't be modified; the gap is what AHR returns. The fix is to scrape each institution's notes directly using its API (the pattern proven by `scrape_ucsf_notes.js`).
+- **Where the content lives now:** Each portal's own UI / API. Stanford specifically: 105 of 139 visits have `IsClinicalNoteAvailable=True` in the raw scrape (Stanford's `LoadReportContent` API is the obvious adaptation target for a Stanford notes scraper).
+- **Implication for H-005 α experiment:** **cannot run against v1's current state.** The Stanford / Sutter / Mayo / MSKCC content the experiment would target isn't there. Pivot options:
+  - Scrape Stanford notes first (analogous Phase A'' work — user logs into Stanford MyHealth, runs a scraper adapted from `scrape_ucsf_notes.js`).
+  - Move to H-005's β (labs entity-linking against DiagnosticReport/Observation) — uses different resources, doesn't depend on note content.
+- **Patients in sample:** 1
+- **Confidence:** Very high — null result across 5 institutions on 30 samples each.
+- **Generalization risk:** Patient-specific in the sense that another patient's institutions will differ. The pattern (AHR ingests DocRef metadata but not Binary content) is generic and will recur across patients.
+- **Action items:**
+  - Audit the AHR ingestion code to confirm Binary URLs are intentionally dropped vs accidentally dropped; if intentional, document why and consider changing.
+  - Build per-institution notes scrapers as needed, modelled on `scrape_ucsf_notes.js`.
+  - Until then, C-015 and C-016 are lower bounds.
+- **Violates principle:** P-DATA-IS-GOLD (silently lost content is silently degrading downstream reasoning).
+- **Re-evaluation trigger:** AHR ingestion audit; or per-institution notes scraper runs.
 
 ---
 
