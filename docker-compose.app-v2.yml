@@ -1,0 +1,13 @@
+# Override: point the app at the v2 HAPI stack.
+#
+# Apply:    docker compose -f docker-compose.yml -f docker-compose.v2.yml -f docker-compose.app-v2.yml up -d --force-recreate api
+# Roll back: docker compose -f docker-compose.yml -f docker-compose.v2.yml up -d --force-recreate api
+#
+# Nothing else in the system changes. v1 HAPI (port 8080) and v2 HAPI (port 8090)
+# both keep running. Only the api service's HAPI_BASE env var differs between
+# the two modes.
+
+services:
+  api:
+    environment:
+      HAPI_BASE: "http://hapi-v2:8080/fhir"
