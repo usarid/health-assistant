@@ -6397,7 +6397,7 @@ function renderApptItem(fields) {
         detailRows += '</div>';
       }
       detailRows += '<div id="' + noteUid + '">';
-      detailRows += '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + noteUid + '\', \'' + escapeHtml(binaryId) + '\')">&#128462; View full note</span>';
+      detailRows += '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + noteUid + '\', \'' + escapeHtml(binaryId) + '\', \'' + escapeHtml(doc.docId) + '\')">&#128462; View full note</span>';
       detailRows += '</div>';
       detailRows += '</div>';
     }
@@ -6427,7 +6427,7 @@ function toggleApptItem(el) {
   el.classList.toggle('expanded');
 }
 
-async function loadBinaryNoteInto(containerId, binaryId) {
+async function loadBinaryNoteInto(containerId, binaryId, docId) {
   const container = document.getElementById(containerId);
   if (!container) return;
 
@@ -6443,6 +6443,27 @@ async function loadBinaryNoteInto(containerId, binaryId) {
 
   container.innerHTML = '<div class="appt-note-loading">Loading note content...</div>';
 
+  // Inline-attachment fast path: if the DocumentReference carried the HTML
+  // as base64 in content.attachment.data (no separate Binary resource — the
+  // v3 → v2-bundle converter does this), decode locally without a server
+  // round-trip. binaryId may be empty in this case.
+  const inlineData = docId && _docInlineData[docId];
+  if (inlineData) {
+    try {
+      const decoded = atob(inlineData);
+      container.innerHTML = '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + containerId + '\', \'' + binaryId + '\', \'' + docId + '\')">&#128462; Hide full note</span><div class="appt-note-content">' + decoded + '</div>';
+      return;
+    } catch (e) {
+      // Fall through to Binary fetch if decode fails
+      console.warn('inline note decode failed:', e);
+    }
+  }
+
+  if (!binaryId) {
+    container.innerHTML = '<div style="font-size:11px; color:#aaa; font-style:italic;">Note content not available.</div>';
+    return;
+  }
+
   try {
     const resp = await fetch('/fhir/Binary/' + encodeURIComponent(binaryId), {
       headers: { 'Accept': 'application/fhir+json' }
@@ -6456,7 +6477,7 @@ async function loadBinaryNoteInto(containerId, binaryId) {
     const binary = await resp.json();
     if (binary.data && binary.contentType?.includes('html')) {
       const decoded = atob(binary.data);
-      container.innerHTML = '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + containerId + '\', \'' + binaryId + '\')">&#128462; Hide full note</span><div class="appt-note-content">' + decoded + '</div>';
+      container.innerHTML = '<span class="appt-note-toggle" onclick="event.stopPropagation(); loadBinaryNoteInto(\'' + containerId + '\', \'' + binaryId + '\', \'' + docId + '\')">&#128462; Hide full note</span><div class="appt-note-content">' + decoded + '</div>';
     } else if (binary.data && binary.contentType?.includes('rtf')) {
       container.innerHTML = '<div style="font-size:11px; color:#aaa; font-style:italic;">Note is in RTF format (not viewable in browser).</div>';
     } else {
@@ -6508,6 +6529,7 @@ async function fetchAllEncounters() {
 // Pre-fetch all DocumentReferences and build a lookup map
 const _docIndex = {};       // encounterRef → [{docId, noteType, date, author, binaryUrl}]
 const _docByDate = {};      // YYYY-MM-DD → [{...}]  fallback matching
+const _docInlineData = {};  // docId → base64 string for inline-attachment notes (no separate Binary)
 let _docIndexReady = false;
 
 async function buildDocumentIndex() {
@@ -6523,6 +6545,12 @@ async function buildDocumentIndex() {
     for (const doc of allDocs) {
       const htmlAtt = doc.content?.find(c => c.attachment?.contentType === 'text/html');
       const binaryUrl = htmlAtt?.attachment?.url || '';
+      // FHIR R4 allows DocumentReference.content.attachment to carry EITHER a
+      // URL pointing at a separate Binary resource OR the bytes inline as
+      // base64 in .data. v1's pipeline used the URL form; the v3 → v2-bundle
+      // converter (tools/v3/convert_to_v2_bundle.py) inlines as .data to
+      // keep the bundle compact. Both shapes are valid; index both.
+      const inlineData = htmlAtt?.attachment?.data || '';
       const noteType = doc.type?.text || doc.type?.coding?.[0]?.display || 'Clinical Note';
       const noteDate = doc.date || '';
       const author = doc.author?.map(a => a.display).filter(Boolean).join(', ')
@@ -6530,8 +6558,12 @@ async function buildDocumentIndex() {
             ?.extension?.find(e => e.url === 'party')?.valueReference?.display || '';
 
       const binaryId = binaryUrl ? binaryUrl.replace('Binary/', '') : '';
-      const contentAvailable = binaryId ? binaryIds.has(binaryId) : false;
-      const info = { docId: doc.id, noteType, date: noteDate, author, binaryUrl, hasHtml: !!binaryUrl, contentAvailable };
+      const binaryAvailable = binaryId ? binaryIds.has(binaryId) : false;
+      const contentAvailable = binaryAvailable || !!inlineData;
+      // Stash inline base64 on a module-level map so loadBinaryNoteInto can
+      // resolve it without re-fetching the DocumentReference.
+      if (inlineData) _docInlineData[doc.id] = inlineData;
+      const info = { docId: doc.id, noteType, date: noteDate, author, binaryUrl, hasHtml: !!binaryUrl || !!inlineData, contentAvailable };
 
       // Index by encounter reference
       const encRefs = doc.context?.encounter || [];
