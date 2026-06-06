@@ -441,19 +441,14 @@ The core hypothesis works for medications. A note that includes a "Current Medic
   3. GET `<source-fhir-base>/Binary/<id>` with `Authorization: Bearer <token>`.
   4. Replace `attachment.url` with `attachment.data` (base64 of the response) — or store the Binary resource locally and keep the URL pointing at HAPI.
   - Total addressable: 461 of 463 DocRefs (excludes 2 Cerner-based).
-- **Gating constraint (audited 2026-06-04, this is the binding blocker):** the existing Epic on FHIR setup does NOT have the OAuth tokens needed for recovery.
-  - The single row in `epic_tokens` is connected to `fhir.epic.com/interconnect-fhir-oauth/...` — Epic's **test sandbox**, not any real EHR. The patient_id `eD.LxhDyX35TntF77l7etUA3` is the sandbox test patient. Expired 2026-04-16.
-  - **0 of 4 real source EHRs** (UCSF, Stanford, Sutter, Mayo) have authorised OAuth tokens.
-  - **The schema is single-tenant** (`CHECK (id = 1)`); only one token can be stored. The table must be redesigned to be one row per (patient × source EHR `fhir_base`) before any multi-EHR OAuth can work.
-  - **`EPIC_CLIENT_ID` is not set in the running container's env** — the OAuth flow can't even be initiated against a real endpoint until the app's client_id is configured.
-- **Required to make recovery real (in order):**
-  1. Confirm/complete production Epic on FHIR app registration (one-time, vendor side).
-  2. Submit the app for approval at each of UCSF, Stanford, Sutter, Mayo (Epic's "publish to customers" mechanism, or per-customer vetting if required). Timeline: typically days-to-weeks per customer.
-  3. Code change: rewrite `epic_tokens` schema as `(fhir_base, patient_id) → token` and update `_get_token` / `_store_token` accordingly.
-  4. Code change: `/api/epic/auth-url` accepts a `fhir_base` parameter to drive per-EHR auth.
-  5. User-flow: log into each source EHR's MyChart in sequence, complete OAuth callback for each.
-  6. Build the recovery script that walks AHR DocRefs and dispatches Binary fetches per the lookup table.
-- **Steps 1-2 are outside the codebase** and gate everything else. Steps 3-4 are small. Steps 5-6 are the actual recovery and can be staged as a single session once 1-2 are in place.
+- **Correction (2026-06-04):** an earlier framing of this entry treated Epic on FHIR `/Binary/{id}` as the recovery path. That conflated two paths and contradicted our broader strategy. The real recovery is direct portal scraping — the same channel we're already using for everything else (messages, AVS, notes) precisely because the USCDI/FHIR APIs don't cover depth. `scrape_ucsf_notes.js` already proves the pattern at UCSF via `/UCSFMyChart/api/report-content/LoadReportContent`; the same shape applies to Stanford / Sutter / Mayo with their own internal note-loading APIs.
+- **Recovery via direct portal scraping (the actual path):**
+  1. For each Epic-based custodian (UCSF, Stanford, Sutter, Mayo), adapt `scrape_ucsf_notes.js` to that portal's internal note-loading endpoint. Per-portal effort is small once the UCSF pattern is fully understood.
+  2. Extract note CSNs / IDs from the corresponding visits scrape (e.g., Stanford's `stanford_visits_raw.json` already has `IsClinicalNoteAvailable=True` for 105 of 139 visits and exposes the CSN).
+  3. Fetch each note via the portal's internal API, store HTML + metadata.
+  4. Run the existing `tools/v2/convert_notes.py` pattern to land them in v2 HAPI as DocumentReferences with the provenance contract.
+- **Why not Epic on FHIR for this?** Epic on FHIR only delivers the USCDI subset (per earlier strategic discussion). The notes that already work — the 108 UCSF ones — were captured via portal scraping, not Epic on FHIR. Doing different EHRs differently (FHIR for some, scraping for others) is the worst of both worlds. Stay on one channel; that channel is scraping.
+- **The Epic on FHIR sandbox state in `epic_tokens` is irrelevant to this recovery.** Real-EHR Epic on FHIR approval (Task #15) is still useful for *other* reasons — e.g., long-tail structured-data refresh without the patient re-logging-in to each portal — but is NOT on C-017's critical path.
 - **Why it matters:**
   - **The assistant's clinical-narrative corpus would grow from 108 to up to 569 notes (108 + 461) — a 5× expansion of textual signal.**
   - **C-015 (PMH gap) and C-016 (vitals-redundant) findings are lower bounds.** Recovering Stanford / Sutter / Mayo notes will surface more PMH entries, more conditions absent from v1, more vital-sign panels for the same-day-correspondence test.
