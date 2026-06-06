@@ -72,6 +72,7 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-012 | confirmed | v1 production discards ~17% of clinical note text by stripping HTML to plaintext before storage; v2 preserves HTML and recovers the structural content | 2026-06-04 |
 | C-013 | confirmed | Stanford visits ingestion was complete in v1 — no data-loss bug analogous to C-011/C-012; the v1 converter captured CSN and core fields cleanly. v2 adds provenance tags and preserves the previously-dropped `_orgKey` (Stanford organisation token) and IsLocal flag | 2026-06-04 |
 | C-014 | confirmed | v1 stores medication name in `medicationReference.display` (731 of 739 MRs), not the FHIR-canonical `medicationCodeableConcept.text` (8 MRs) — entity-linking code must check both | 2026-06-04 |
+| C-015 | confirmed | The PMH section in a single UCSF clinical note contains 9+ real diagnoses (GERD 2002, Low back pain 2003, SVT, Bacterial overgrowth, Claudication, …) that have no corresponding Condition in v1; clinical notes are a richer source of patient problem list than v1's structured Condition store | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
@@ -344,12 +345,23 @@ The core hypothesis works for medications. A note that includes a "Current Medic
 - Production gaps above need closing before the replace-with-reference output is reliable enough to ship.
 - Need to validate on other resource types (allergies, conditions, procedures) and other portals (Stanford, MSKCC have notes too).
 
+**Follow-up prototype 2026-06-04 (`tools/v2/h005_multi_resource_entity_linking.py`):** extended the mechanism to Allergies, Past Medical History, and Vitals on the same note.
+
+- **Allergies → AllergyIntolerance:** 1/1 = 100% match. The v1 corpus is small (3 AIs, of which 2 are noise — 'unknown' and 'nka') so the test is qualitative; the mechanism does what it should.
+- **PMH → Condition:** 12 exact + 2 partial = 14/30 match (47%). Of the 16 unmatched, ~8 are comment-only sub-rows (production prototype gap, easy fix) and ~8-9 are real diagnoses not represented in v1 → this surfaced **C-015**, an analogue of C-011 for problem lists.
+- **Vitals → Observation:** 4/4 real vital values matched, all ±0 days from the note (same-day vitals panel). BP, Pulse, SpO2, Weight all resolved to the same Observation panel (`eA7wCL2.BuYlcWycMIRRWt2VO0yc3B5t`). Strong same-day-correspondence signal, same as for medications prescribed at this visit (tamsulosin ±0d).
+
+**Two patterns generalised:**
+- **Same-day correspondence** — when a clinical event happens during a visit (vitals collected, med prescribed), the note's table entry and the structured resource share a precise date. Date-based selection is the strongest single signal.
+- **Notes contain more than HAPI knows** — both meds (via fresh prescription noted) and conditions (via doctor-maintained problem list) can be richer in notes than in the structured store. Entity linking is therefore bidirectional: dedup *and* augment.
+
 **Next prototype experiments worth running** (in approximate decreasing value):
 
-1. Same approach against the Allergies and Past Medical History tables — different resource types, different match quality.
-2. Apply across all 18 UCSF Office Visit notes, measure aggregate match rate.
+1. Run the multi-resource prototype across all 18 UCSF Office Visit notes; aggregate the unmatched-real-diagnoses count to size the C-015 gap.
+2. Test against Stanford notes (different EHR's note format — does the same table-extraction approach work?).
 3. Compare structured-table extraction against prose-level extraction in the same note (does prose add anything tables don't already capture, or is it pure redundancy?).
 4. Build the actual "replace-with-reference" rendering and inspect for readability.
+5. Map ANA positive and similar "lab finding" PMH entries to Observation, not Condition — needs a routing layer.
 
 - **Re-evaluation trigger:** Any of the above experiments produces a meaningfully different result. Or new patient enrols.
 
@@ -398,6 +410,26 @@ The core hypothesis works for medications. A note that includes a "Current Medic
 - **Confidence:** High.
 - **Generalization risk:** Stanford visits handled well in v1 doesn't mean Stanford test results / UCSF visits / etc. will be. The next conversion (Stanford test results) is the relevant next data point.
 - **Re-evaluation trigger:** When v2 expands to other resource types or to patient N+1.
+
+---
+
+### C-015 — Clinical notes' PMH section is a richer problem list than v1's structured Condition store
+
+- **Status:** `confirmed` (2026-06-04)
+- **Claim:** A single UCSF Office Visit note's "Past Medical History" table contains 30 entries; after filtering out comment-only sub-rows, ~22 are real diagnoses. Of those, only ~12-14 have matching `Condition` resources in v1's HAPI (40-47% match rate). The remaining ~9 are real, named clinical diagnoses (GERD with onset 2002, Low back pain with onset 2003, Bacterial overgrowth syndrome, Claudication, SVT [supraventricular tachycardia], ANA positive, Abdominal bloating, Skipped heart beats, Allergy-as-condition) that are present in the clinical note but **have no matching `Condition` resource in v1's structured store**.
+- **Why this matters:**
+  - **Analogue of C-011 for problem lists.** v1's clinical reasoning (assistant, analyst, profile-builder) sees 65 Conditions; the actual clinician-curated problem list in a single note is materially larger. Across 108 notes the gap is likely substantially bigger.
+  - **GERD (2002), Low back pain (2003), Paronychia (10/15/2015)** — entries in PMH carry precise onset dates that v1 doesn't have for the few Conditions it does store.
+  - **The fix is entity-linking the other direction.** v1's Condition store can be *augmented* from PMH table extraction across all clinical notes — not just dedup'd from them. This is the inverse of H-005's "replace with reference" goal; it's "extract to populate."
+- **Methodology limitation found:** the prototype's bullet-row detector also picks up sub-comment rows ("Using PPI to control", "Neg BMBx + PET scan.") that aren't diagnoses. Counted as 8 of the 16 "unmatched" cases. Production needs explicit comment-row filtering.
+- **Patients in sample:** 1
+- **Confidence:** High for the existence of the gap; the count (9+ unmatched real diagnoses) is a lower bound — single-note test.
+- **Generalization risk:** Other notes will surface more unique diagnoses. The cumulative gap across 108 notes likely exceeds 50 real diagnoses missing from v1's Condition store.
+- **Action items:**
+  - Treat C-015 as a v3-pipeline requirement: PMH-table extraction → Condition resource synthesis with deterministic IDs (deduped across notes that share diagnoses).
+  - Audit the existing assistant/analyst for "list my conditions" type queries — they're currently incomplete.
+- **Violates principle:** P-DATA-IS-GOLD.
+- **Re-evaluation trigger:** When the H-005 prototype is run across all 108 UCSF notes and the cumulative unmatched-diagnoses count is measured.
 
 ---
 
