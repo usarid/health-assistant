@@ -62,6 +62,17 @@
       },
       "max_concurrency": 1,
       "rate_limit_ms": 80
+    },
+
+    "upcoming_visits": {
+      "_comment": "Upcoming visits live in a different Epic component than past visits. At Stanford it's instance 5 (the UpcomingVisits component) which doesn't expose RenderedData; its work-list is in Data.NextNDaysVisits + Data.LaterVisitsList + Data.InProgressVisits. Each entry has Csn, Instant, PrimaryDate, VisitTypeName, PrimaryDepartment, PrimaryProvider, Organization, etc. — enough to build a planned Encounter without any additional API call. (IsClinicalInformationAvailable is false on upcoming visits, so there's nothing to fetch.) The convert_to_v2_bundle.py converter handles this shape via its `--upcoming` mode and emits status='planned' Encounters.",
+      "discovery": {
+        "mode": "epic_component_data",
+        "instance": 5,
+        "data_paths": ["NextNDaysVisits", "LaterVisitsList", "InProgressVisits"]
+      },
+      "filter": { "path_equals": ["IsLocal", true] },
+      "_no_endpoint": "This job has no endpoint — the RD-equivalent entry from discovery IS the full payload. The runtime currently still calls an endpoint per item; until that supports a no-call mode, this job is run as a save-the-discovered-list-to-file flow rather than via runner.run()."
     }
   }
 }

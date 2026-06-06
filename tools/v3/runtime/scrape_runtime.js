@@ -151,6 +151,31 @@
     return inst.RenderedData.slice();
   }
 
+  // Some Epic components don't expose their work-list as a single
+  // RenderedData array — they keep it under `.Data.<path>`, often split
+  // across multiple arrays per component. Stanford's UpcomingVisits
+  // component (instance 5) keeps its entries in Data.NextNDaysVisits +
+  // Data.LaterVisitsList + Data.InProgressVisits. This mode reads every
+  // configured path and concatenates them. No paginator support here —
+  // upcoming-style lists are bounded.
+  function discoverEpicComponentData(discCfg) {
+    const inst = (global.Epic
+      && global.Epic.PatientAccess
+      && global.Epic.PatientAccess.Components
+      && global.Epic.PatientAccess.Components.__Instances
+      && global.Epic.PatientAccess.Components.__Instances[discCfg.instance]);
+    if (!inst) throw new Error(`No Epic instance ${discCfg.instance}`);
+    const root = inst.Data;
+    if (!root) throw new Error(`Instance ${discCfg.instance} has no .Data`);
+    const out = [];
+    for (const path of (discCfg.data_paths || [])) {
+      const v = getPath(root, path);
+      if (Array.isArray(v)) out.push(...v);
+      else if (v != null) out.push(v);
+    }
+    return out;
+  }
+
   function discoverDomHrefScan(discCfg) {
     const out = [];
     const seen = new Set();
@@ -253,6 +278,8 @@
     let workItems;
     if (jobCfg.discovery.mode === 'epic_rendered_data') {
       workItems = await discoverEpicRenderedData(jobCfg.discovery, opts);
+    } else if (jobCfg.discovery.mode === 'epic_component_data') {
+      workItems = discoverEpicComponentData(jobCfg.discovery);
     } else if (jobCfg.discovery.mode === 'dom_href_scan') {
       workItems = discoverDomHrefScan(jobCfg.discovery);
     } else if (jobCfg.discovery.mode === 'from_dependency') {

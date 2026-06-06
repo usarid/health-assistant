@@ -317,12 +317,127 @@ def convert_note(note, portal, src_file, scraper_ver):
 
 
 # ── Main ───────────────────────────────────────────────────────────────
+def convert_upcoming_visit(rd, portal, src_file, scraper_ver):
+    """Upcoming visit → Encounter (status='planned'). Input is a flat
+    RenderedData-style entry pulled from Epic's UpcomingVisits component
+    (instance 5's Data.NextNDaysVisits + Data.LaterVisitsList + InProgressVisits).
+    No visit-details API response — we work from the RD entry alone."""
+    cfg = PORTAL_CFG[portal]
+    csn = rd.get('Csn') or rd.get('Id') or ''
+    visit_type = (rd.get('VisitTypeName') or '').strip()
+
+    # PrimaryProviderName on upcoming visits is sometimes an object {Name: …}
+    # not a string — guard.
+    pp = rd.get('PrimaryProviderName')
+    if isinstance(pp, str):
+        provider = pp.strip()
+    elif isinstance(pp, dict):
+        provider = (pp.get('Name') or pp.get('FullName') or '').strip()
+    else:
+        provider = ''
+
+    dept = ((rd.get('PrimaryDepartment') or {}).get('Name') or '').strip()
+    org_key = rd.get('_orgKey') or ''
+    org_name = (rd.get('Organization') or {}).get('OrganizationName', '') or ''
+    start_dt = (parse_epic_instant(rd.get('Instant')) or
+                parse_display_date(rd.get('PrimaryDate')) or
+                parse_display_date(rd.get('Date')) or '')
+
+    rid = det_id(cfg['enc_prefix'], csn or visit_type, start_dt or '', provider)
+
+    identifiers = []
+    if csn:
+        identifiers.append({'system': cfg['portal_enc_ns'], 'value': csn})
+        identifiers.append({'system': NS_EPIC_ENCOUNTER, 'value': csn})
+
+    tags = [
+        {'system': NS_SRC_PORTAL,    'code': cfg['src_portal']},
+        {'system': NS_SRC_ORG,       'code': cfg['src_org']},
+        {'system': NS_CONVERTER_VER, 'code': CONVERTER_VERSION},
+        {'system': NS_SCRAPER_VER,   'code': scraper_ver},
+        {'system': NS_SRC_FILE,      'code': src_file},
+    ]
+    if org_key:
+        tags.append({'system': NS_SRC_ORG_ID, 'code': org_key})
+
+    enc = {
+        'resourceType': 'Encounter',
+        'id': rid,
+        'status': 'planned',     # FHIR R4 status for upcoming visits
+        'class': make_encounter_class(visit_type),
+        'meta': {'tag': tags},
+    }
+    if identifiers:
+        enc['identifier'] = identifiers
+    if visit_type:
+        enc['type'] = [{'text': visit_type}]
+    if start_dt:
+        enc['period'] = {'start': start_dt}
+    if provider:
+        enc['participant'] = [{
+            'individual': {'display': provider},
+            'type': [{'coding': [{
+                'system': 'http://terminology.hl7.org/CodeSystem/v3-ParticipationType',
+                'code': 'ATND', 'display': 'attender',
+            }]}],
+        }]
+    if dept:
+        enc['serviceType'] = {'text': dept}
+    if org_name:
+        enc['serviceProvider'] = {'display': org_name}
+    enc['meta']['tag'].append({'system': NS_ENCOUNTER_FLAG, 'code': 'upcoming'})
+    if rd.get('IsLocal') is True:
+        enc['meta']['tag'].append({'system': NS_ENCOUNTER_FLAG, 'code': 'is-local'})
+    return enc
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('portal', choices=['stanford', 'ucsf'])
     ap.add_argument('--visits', default=None, help='override visits file path')
     ap.add_argument('--notes', default=None, help='override notes file path')
+    ap.add_argument('--upcoming', default=None,
+                    help='upcoming-visits input file (shape: {upcoming: [rd, ...]}). '
+                         'When this is the only input, the script emits only an '
+                         'Encounter Bundle for the upcoming visits (no notes).')
     args = ap.parse_args()
+
+    # Upcoming-only mode
+    if args.upcoming and not args.visits and not args.notes:
+        cfg = PORTAL_CFG[args.portal]
+        with open(args.upcoming) as f:
+            payload = json.load(f)
+        rds = payload.get('upcoming') or payload.get('visits') or []
+        print(f'=== v3 upcoming → v2-bundle: {args.portal} ===')
+        print(f'  upcoming: {args.upcoming}')
+        print(f'  entries to convert: {len(rds)}')
+        src_file = f'{args.portal}-v3-upcoming-{datetime.now().strftime("%Y-%m-%d")}'
+        scraper_ver = f'{cfg["src_portal"]}-v3-upcoming-2026-06'
+        encounters = []
+        seen = set()
+        for rd in rds:
+            e = convert_upcoming_visit(rd, args.portal, src_file, scraper_ver)
+            if e['id'] in seen:
+                continue
+            seen.add(e['id'])
+            encounters.append(e)
+        class_dist = Counter(e['class']['display'] for e in encounters)
+        print()
+        print('Encounter class distribution:')
+        for k, n in class_dist.most_common():
+            print(f'  {n:>4d}  {k}')
+        bundle = {
+            'resourceType': 'Bundle', 'type': 'transaction',
+            'entry': [
+                {'resource': e, 'request': {'method': 'PUT', 'url': f'Encounter/{e["id"]}'}}
+                for e in encounters
+            ],
+        }
+        out = OUT_DIR / f'{args.portal}-v3-upcoming-bundle.json'
+        with open(out, 'w') as f:
+            json.dump(bundle, f)
+        print(f'\nWrote: {out}  ({out.stat().st_size/1024:.0f} KB, {len(encounters)} entries)')
+        return
 
     cfg = PORTAL_CFG[args.portal]
     visits_path = Path(args.visits) if args.visits else OUT_DIR / f'{args.portal}-v3-visits.json'

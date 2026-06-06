@@ -55,6 +55,20 @@ Optionally drives a UI paginator before reading.
 }
 ```
 
+### `epic_component_data`
+
+Reads the work-list from an Epic SPA component's `.Data.<path>` rather than from `.RenderedData`. Some Epic components (e.g. Stanford's UpcomingVisits component, instance 5) keep their work-list split across multiple sibling arrays under `.Data` — this mode concatenates the listed paths.
+
+```jsonc
+"discovery": {
+  "mode": "epic_component_data",
+  "instance": 5,
+  "data_paths": ["NextNDaysVisits", "LaterVisitsList", "InProgressVisits"]
+}
+```
+
+Each path is read with the same null-tolerant getter the filter spec uses. If a path resolves to an array its entries are appended to the work-list; if it resolves to a scalar/object it's appended as a single entry. No paginator support — upcoming-style lists are bounded.
+
 ### `dom_href_scan`
 
 Walks `<a href>` elements in the rendered inbox / list, extracting query parameters from each href as work-items.
