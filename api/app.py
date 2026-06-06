@@ -78,6 +78,26 @@ async def shutdown():
 # Health check
 # ═══════════════════════════════════════════════════════════════
 
+def _derive_dataset():
+    """Which backend dataset is the app pointed at?
+
+    Detection order:
+      1. DATASET_VERSION env var, if set (explicit override).
+      2. Inspect HAPI_BASE hostname — anything containing '-v2' (e.g.
+         the docker hostname `hapi-v2`) is the v2 rebuild stack.
+      3. Default to 'v1' (production).
+
+    Returned as a short label for the UI ('v1' / 'v2' / arbitrary string)
+    plus the raw HAPI_BASE so the user can verify what they're talking to.
+    """
+    explicit = os.environ.get('DATASET_VERSION')
+    if explicit:
+        return explicit
+    if '-v2' in HAPI_BASE or '/v2' in HAPI_BASE:
+        return 'v2'
+    return 'v1'
+
+
 @app.get('/api/health')
 async def health():
     """Health check — also verifies HAPI connectivity."""
@@ -91,6 +111,8 @@ async def health():
         'status': 'ok' if hapi_ok else 'degraded',
         'hapi': 'connected' if hapi_ok else 'unreachable',
         'synonym_groups': len(SYNONYM_GROUPS),
+        'dataset': _derive_dataset(),
+        'hapi_base': HAPI_BASE,
     }
 
 

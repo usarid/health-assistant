@@ -20,6 +20,17 @@
   nav a.active, nav a:hover { background: #f0f0f0; color: #111; }
   nav .nav-logout { margin-left: auto; font-size: 12px; color: #888; padding: 4px 10px; }
   nav .nav-logout:hover { background: #fee; color: #b91c1c; }
+  /* Dataset badge — tells the user which backend HAPI dataset the app is currently
+     reading from (v1 = production, v2 = rebuild stack). Loaded from /api/health.
+     Colour-coded so a wrong-dataset state is impossible to miss. */
+  nav .dataset-badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: #e5e7eb; color: #444; font-weight: 700;
+    cursor: help; letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  nav .dataset-badge.dataset-v1 { background: #d1fae5; color: #065f46; }
+  nav .dataset-badge.dataset-v2 { background: #fef3c7; color: #92400e; }
+  nav .dataset-badge.dataset-unknown { background: #fee2e2; color: #991b1b; }
 
   .page { display: none; padding: 24px; max-width: 1400px; margin: 0 auto; }
   .page.active { display: block; }
@@ -1299,6 +1310,7 @@
 
 <nav>
   <h1><img src="/logo/bina-icon.svg" alt="Bina Health">Bina Health</h1>
+  <span class="dataset-badge dataset-unknown" id="dataset-badge" title="Loading dataset info…">…</span>
   <a href="#" class="active" data-page="home">Home</a>
   <a href="#" data-page="assistant"><span class="ast-name">Assistant</span></a>
   <a href="#" data-page="meds">Meds</a>
@@ -3485,6 +3497,30 @@ function renderTimeline() {
 // ═══════════════════════════════════════════════════════════════
 async function checkHealth() {
   const issues = [];
+
+  // Dataset badge — which backend (v1 / v2 / unknown) is the app pointing at?
+  // Pulled from /api/health (the FastAPI side knows HAPI_BASE).
+  const datasetBadge = document.getElementById('dataset-badge');
+  try {
+    const r = await fetch('/api/health');
+    if (r.ok) {
+      const h = await r.json();
+      const ds = (h.dataset || 'unknown').toString();
+      datasetBadge.textContent = ds;
+      datasetBadge.className = 'dataset-badge dataset-' +
+        (['v1','v2'].includes(ds) ? ds : 'unknown');
+      datasetBadge.title = 'Backend: ' + (h.hapi_base || '(unknown)') +
+        '\nDataset: ' + ds +
+        '\nHAPI: ' + (h.hapi || '?');
+    } else {
+      datasetBadge.textContent = '?';
+      datasetBadge.className = 'dataset-badge dataset-unknown';
+    }
+  } catch (e) {
+    datasetBadge.textContent = '?';
+    datasetBadge.className = 'dataset-badge dataset-unknown';
+    datasetBadge.title = '/api/health unreachable';
+  }
 
   const dotHapi = document.getElementById('dot-hapi');
   const statusHapi = document.getElementById('status-hapi');
