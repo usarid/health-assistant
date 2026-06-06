@@ -437,10 +437,23 @@ The core hypothesis works for medications. A note that includes a "Current Medic
   - **`api/epic_oauth.py` already implements the PKCE flow** for patient-facing Epic on FHIR — the infrastructure is in place. Per-EHR OAuth tokens are the only missing piece.
 - **The recovery path (per AHR DocRef):**
   1. Read `custodian.display` → map to known Epic FHIR endpoint (lookup table).
-  2. Use that source EHR's stored OAuth token (assistant has refresh-token machinery already).
+  2. Use that source EHR's stored OAuth token.
   3. GET `<source-fhir-base>/Binary/<id>` with `Authorization: Bearer <token>`.
   4. Replace `attachment.url` with `attachment.data` (base64 of the response) — or store the Binary resource locally and keep the URL pointing at HAPI.
   - Total addressable: 461 of 463 DocRefs (excludes 2 Cerner-based).
+- **Gating constraint (audited 2026-06-04, this is the binding blocker):** the existing Epic on FHIR setup does NOT have the OAuth tokens needed for recovery.
+  - The single row in `epic_tokens` is connected to `fhir.epic.com/interconnect-fhir-oauth/...` — Epic's **test sandbox**, not any real EHR. The patient_id `eD.LxhDyX35TntF77l7etUA3` is the sandbox test patient. Expired 2026-04-16.
+  - **0 of 4 real source EHRs** (UCSF, Stanford, Sutter, Mayo) have authorised OAuth tokens.
+  - **The schema is single-tenant** (`CHECK (id = 1)`); only one token can be stored. The table must be redesigned to be one row per (patient × source EHR `fhir_base`) before any multi-EHR OAuth can work.
+  - **`EPIC_CLIENT_ID` is not set in the running container's env** — the OAuth flow can't even be initiated against a real endpoint until the app's client_id is configured.
+- **Required to make recovery real (in order):**
+  1. Confirm/complete production Epic on FHIR app registration (one-time, vendor side).
+  2. Submit the app for approval at each of UCSF, Stanford, Sutter, Mayo (Epic's "publish to customers" mechanism, or per-customer vetting if required). Timeline: typically days-to-weeks per customer.
+  3. Code change: rewrite `epic_tokens` schema as `(fhir_base, patient_id) → token` and update `_get_token` / `_store_token` accordingly.
+  4. Code change: `/api/epic/auth-url` accepts a `fhir_base` parameter to drive per-EHR auth.
+  5. User-flow: log into each source EHR's MyChart in sequence, complete OAuth callback for each.
+  6. Build the recovery script that walks AHR DocRefs and dispatches Binary fetches per the lookup table.
+- **Steps 1-2 are outside the codebase** and gate everything else. Steps 3-4 are small. Steps 5-6 are the actual recovery and can be staged as a single session once 1-2 are in place.
 - **Why it matters:**
   - **The assistant's clinical-narrative corpus would grow from 108 to up to 569 notes (108 + 461) — a 5× expansion of textual signal.**
   - **C-015 (PMH gap) and C-016 (vitals-redundant) findings are lower bounds.** Recovering Stanford / Sutter / Mayo notes will surface more PMH entries, more conditions absent from v1, more vital-sign panels for the same-day-correspondence test.
