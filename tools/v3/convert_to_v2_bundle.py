@@ -245,6 +245,20 @@ def convert_visit(visit, portal, src_file, scraper_ver):
     return enc
 
 
+def _has_visible_text(html):
+    """Return True if the HTML has any visible (non-whitespace) text after tag
+    stripping. Stanford's LoadReportContent returns a 755-char rendering
+    skeleton with zero visible text for every note (see C-021 / task #19);
+    we use this to detect that case and skip producing a content attachment,
+    so the frontend's contentAvailable check correctly says 'no content yet'
+    instead of showing a misleading 'View full note' link on an empty body."""
+    if not html:
+        return False
+    plain = re.sub(r'<[^>]+>', '', html)
+    plain = plain.replace('&nbsp;', ' ').strip()
+    return bool(plain)
+
+
 def convert_note(note, portal, src_file, scraper_ver):
     """v3 note → DocumentReference. Links to the Encounter via context.encounter
     using the same det_id derivation as the visit converter."""
@@ -252,6 +266,7 @@ def convert_note(note, portal, src_file, scraper_ver):
     visit = note.get('item') or {}             # the visits-result row
     resp = note.get('response') or {}
     report_html = resp.get('reportContent') or resp.get('html') or resp.get('reportHtml') or ''
+    has_real_body = _has_visible_text(report_html)
     csn = v_csn(visit)
     provider = v_provider(visit)
     dept = v_dept(visit)
@@ -281,7 +296,7 @@ def convert_note(note, portal, src_file, scraper_ver):
         identifiers.append({'system': cfg['portal_note_ns'], 'value': csn})
 
     content = []
-    if report_html:
+    if report_html and has_real_body:
         content.append({
             'attachment': {
                 'contentType': 'text/html',
@@ -289,6 +304,12 @@ def convert_note(note, portal, src_file, scraper_ver):
                 'title': f'{visit_type} - {start_dt}' if visit_type and start_dt else (visit_type or start_dt or ''),
             }
         })
+    elif report_html:
+        # Skeleton-only — mark the DocRef so a future re-scrape with the
+        # real content endpoint (task #19) can identify these.
+        # Frontend sees no content array → contentAvailable=false → no
+        # misleading "View full note" toggle.
+        tags.append({'system': NS_ENCOUNTER_FLAG, 'code': 'content-skeleton-only'})
 
     docref = {
         'resourceType': 'DocumentReference',
@@ -308,7 +329,7 @@ def convert_note(note, portal, src_file, scraper_ver):
         docref['custodian'] = {'display': dept}
     if content:
         docref['content'] = content
-    if report_html:
+    if report_html and has_real_body:
         try:
             docref['description'] = strip_html(report_html)[:200]
         except Exception:
