@@ -1,5 +1,11 @@
 # Bina Health — Personal Health Vault
 
+## Working style (Claude, read this)
+
+- Don't editorialize about my time, energy, or stamina. No "long session," "go rest," "good place to pause for the day," "you've earned a break," or any variant. I manage my own pace.
+- Don't append unsolicited mood-management lines to summaries. End on the substance.
+- "Next reasonable moves" framings are welcome and useful; emotional-state framings are not.
+
 ## What This Is
 
 A self-hosted personal health record system that aggregates clinical data from multiple institutions (Stanford, UCSF, Mayo, MSKCC, Sutter), Apple Health wearables, and Epic on FHIR into a unified FHIR R4 database. Includes an AI assistant (Claude), medication reconciliation, trend analysis, and a reminder system.
