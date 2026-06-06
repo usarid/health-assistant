@@ -56,12 +56,17 @@ def compare_ucsf_visits(v3_path):
     raw_visits = raw.get('visits') or raw if isinstance(raw, list) else raw.get('visits', [])
     print(f'baseline ucsf_visits_full.json: {len(raw_visits)}')
 
-    # Match by CSN
+    # Match by CSN. v3 stores it at item.Csn (from the RenderedData entry).
+    # The baseline raw export was produced by the v1 scrape which wrapped the
+    # API response in a `details` field; v3 stores the raw response directly.
+    # We accept both for resilience.
     def csn_of_v3(entry):
-        return (entry.get('item') or {}).get('Csn', '')
+        item = entry.get('item') or {}
+        resp = entry.get('response') or {}
+        return item.get('Csn') or resp.get('csn') or (resp.get('details') or {}).get('csn') or ''
 
     def csn_of_raw(v):
-        return v.get('csn', '') or (v.get('details') or {}).get('csn', '')
+        return v.get('csn', '') or (v.get('details') or {}).get('csn', '') or v.get('Csn', '')
 
     v3_csns = {csn_of_v3(e) for e in v3_visits if csn_of_v3(e)}
     raw_csns = {csn_of_raw(v) for v in raw_visits if csn_of_raw(v)}
@@ -92,29 +97,40 @@ def compare_ucsf_notes(v3_path):
     raw_notes = raw.get('notes') or []
     print(f'baseline ucsf_notes_full.json: {len(raw_notes)}')
 
-    # Match by encounter CSN — but the v3 schema is different from the raw schema, so derive both
+    # Baseline notes (ucsf_notes_full.json) don't carry the encounter CSN — they
+    # only have (date, provider, visitType). Match on a tuple of those instead,
+    # using the visit-summary info v3 has access to via item.response.
     def v3_key(e):
         item = e.get('item') or {}
-        # depends_on=visits puts the prior result here
         resp = item.get('response') or {}
-        details = resp.get('details') or item
-        return details.get('csn') or item.get('Csn', '')
+        vs = resp.get('visitSummaryInfo') or {}
+        inner = item.get('item') or {}
+        # encounterDate format: 'Feb 19, 2026'; baseline: 'Feb 19, 2026'
+        date = vs.get('encounterDate') or inner.get('Date') or ''
+        provider = vs.get('provider') or inner.get('PrimaryProviderName') or ''
+        # Use just date+provider — type fields format differs between v1 raw and v3 RD
+        return (date.strip(), provider.strip())
 
     def raw_key(n):
-        return (n.get('details') or {}).get('csn') or n.get('csn', '')
+        return ((n.get('encounterDate') or n.get('date') or '').strip(),
+                (n.get('provider') or '').strip())
 
-    v3_keys = {v3_key(e) for e in v3_notes if v3_key(e)}
-    raw_keys = {raw_key(n) for n in raw_notes if raw_key(n)}
+    # Filter to non-empty keys (both parts must be present)
+    v3_keys = {k for k in (v3_key(e) for e in v3_notes) if k[0] and k[1]}
+    raw_keys = {k for k in (raw_key(n) for n in raw_notes) if k[0] and k[1]}
     print()
-    print(f'CSN intersection:    {len(v3_keys & raw_keys)}')
-    print(f'v3-only CSNs:        {len(v3_keys - raw_keys)}')
-    print(f'baseline-only CSNs:  {len(raw_keys - v3_keys)}')
+    print(f'Match key: (encounter_date, provider)')
+    print(f'  v3 keys (with both fields):       {len(v3_keys)}')
+    print(f'  baseline keys (with both fields): {len(raw_keys)}')
+    print(f'  intersection:    {len(v3_keys & raw_keys)}')
+    print(f'  v3-only:         {len(v3_keys - raw_keys)}')
+    print(f'  baseline-only:   {len(raw_keys - v3_keys)}')
 
     # Content presence sanity
     v3_with_content = sum(1 for e in v3_notes
                           if (e.get('response') or {}).get('reportHtml') or
                              (e.get('response') or {}).get('reportContent'))
-    print(f'v3 notes with non-empty content: {v3_with_content}/{len(v3_notes)}')
+    print(f'\nv3 notes with non-empty content: {v3_with_content}/{len(v3_notes)}')
 
 
 # ── Stanford coverage check vs AHR manifest ────────────────────────────

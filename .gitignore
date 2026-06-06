@@ -51,3 +51,7 @@ tools/v2/out/
 # Patient-specific config (clinician→org mappings) — committed only as .example
 tools/v2/patient_config/org_mapping.json
 tools/v2/patient_config/patient_identity.json
+
+# ── v3 scraper ──
+# Live scraped output (contains full clinical note HTML; never commit)
+tools/v3/out/
