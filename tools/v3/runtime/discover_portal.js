@@ -1,7 +1,8 @@
 /**
- * v3 portal-discovery helper — paste in DevTools console while logged into
- * a new Epic-based MyChart portal (e.g. Stanford MyHealth) to capture the
- * portal-specific values needed for a v3 config.
+ * v3 portal-discovery helper — paste in DevTools console (or inject via the
+ * Chrome MCP) while logged into a new Epic-based MyChart portal (e.g.
+ * Stanford MyHealth) to capture the portal-specific values needed for a v3
+ * config.
  *
  * Usage:
  *   1. Log into the portal in your browser.
@@ -9,19 +10,26 @@
  *   3. Paste this entire file.
  *   4. Navigate to Visits and expand at least one visit with a clinical note
  *      (so the relevant API calls fire).
- *   5. Run `discoverPortal()` in the console.
- *   6. Copy the JSON output and paste it back to the assistant.
+ *   5. Run `discoverPortal()` in the console — this finalizes capture and
+ *      shows a "Save discovery" button.
+ *   6. Click the Save button and save the JSON to a local file.
+ *
+ * Per P-PHI-STAYS-LOCAL: request body VALUES are scrubbed to type sketches
+ * before being returned — CSNs, tokens, IDs become "<string length=N>" etc.
+ * The structural information (field names, paths, methods) is what we need
+ * to write the config; the values were never useful and were just incidental.
  *
  * What this captures:
  *   - The Epic SPA component instances and the size of each RenderedData array
  *     (so we can identify which instance holds the visits list).
  *   - Every JSON API call that fired while this script was active, with
- *     method / path / sample request body / sample response shape.
+ *     method / path / request-body field shape / response shape.
  *   - The portal's anti-forgery token presence + the URL base path.
  *
  * What this does NOT do:
- *   - Send any data anywhere. Everything stays in your browser. The output is
- *     a string for you to copy at your discretion.
+ *   - Send any data anywhere. Everything stays in your browser. The
+ *     "Save discovery" button uses showSaveFilePicker — you choose where the
+ *     file lands; nothing leaves the tab automatically.
  */
 
 (function (global) {
@@ -63,9 +71,11 @@
           startedAt,
           method: (opts.method || 'GET').toUpperCase(),
           url,
-          requestBody: bodyParsed,
+          // Both request body and response are scrubbed: we record the
+          // shape (field names + value types), never the values. Per
+          // P-PHI-STAYS-LOCAL.
+          requestBodyShape: shapeOf(bodyParsed, 4),
           responseStatus: respStatus,
-          // Trim the response shape — we only want the structure, not all the content
           responseShape: shapeOf(respJson, 3),
         });
       }
@@ -73,20 +83,23 @@
   };
 
   function shapeOf(v, depth) {
-    if (depth < 0 || v == null) return typeof v;
+    if (v == null) return typeof v;
+    if (typeof v === 'boolean') return v;  // booleans aren't sensitive
+    if (typeof v === 'number') return '<number>';
+    if (typeof v === 'string') return `<string length=${v.length}>`;
+    if (depth < 0) return typeof v;
     if (Array.isArray(v)) {
       return v.length === 0
         ? 'array[]'
         : `array[${v.length}] of ${shapeOf(v[0], depth - 1)}`;
     }
     if (typeof v === 'object') {
-      const keys = Object.keys(v).slice(0, 12);
+      const keys = Object.keys(v).slice(0, 16);
       const inner = {};
       for (const k of keys) inner[k] = shapeOf(v[k], depth - 1);
-      if (Object.keys(v).length > 12) inner['…'] = `(${Object.keys(v).length - 12} more)`;
+      if (Object.keys(v).length > 16) inner['…'] = `(${Object.keys(v).length - 16} more)`;
       return inner;
     }
-    if (typeof v === 'string') return v.length > 60 ? 'string(long)' : 'string';
     return typeof v;
   }
 
@@ -169,11 +182,45 @@
     };
 
     const json = JSON.stringify(result, null, 2);
-    console.log('%c[v3 discover] result ready — copy from below or call window.__v3_discover_result',
-      'color:#2196F3;font-weight:bold');
     global.__v3_discover_result = result;
-    console.log(json);
-    return json;
+
+    // Inject a "Save discovery" button — uses showSaveFilePicker (requires
+    // a user-gesture click) so the JSON lands in a file the user picks.
+    // Per P-PHI-STAYS-LOCAL: nothing about the file leaves the tab on its
+    // own; the user (or the Chrome MCP click-as-user-gesture) initiates it.
+    document.getElementById('v3-discover-save-btn')?.remove();
+    const btn = document.createElement('button');
+    btn.id = 'v3-discover-save-btn';
+    btn.textContent = 'Save discovery';
+    Object.assign(btn.style, {
+      position: 'fixed', top: '8px', left: '8px', zIndex: '999999',
+      padding: '12px 18px', fontSize: '14px', background: '#4CAF50', color: 'white',
+      border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold',
+    });
+    btn.onclick = async () => {
+      btn.textContent = 'Saving…';
+      try {
+        const host = (location.host || 'portal').replace(/[^A-Za-z0-9.-]/g, '_');
+        const name = `${host}-discovery.json`;
+        const handle = await window.showSaveFilePicker({
+          suggestedName: name,
+          types: [{ description: 'JSON', accept: { 'application/json': ['.json'] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(json);
+        await writable.close();
+        btn.textContent = '✓ Saved';
+        global.__v3_save_status = 'saved';
+      } catch (e) {
+        btn.textContent = 'Error: ' + String(e).substring(0, 40);
+        global.__v3_save_status = 'error: ' + String(e).substring(0, 100);
+      }
+    };
+    document.body.appendChild(btn);
+
+    console.log('%c[v3 discover] result ready — click the green "Save discovery" button to save to a file',
+      'color:#4CAF50;font-weight:bold');
+    return { ready: true, sizeKB: (json.length / 1024).toFixed(1), buttonId: 'v3-discover-save-btn' };
   };
 
   console.log('%c[v3 discover] active. Navigate Visits → expand a note → run discoverPortal()',
