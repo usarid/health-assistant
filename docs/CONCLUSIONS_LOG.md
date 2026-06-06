@@ -72,7 +72,8 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-012 | confirmed | v1 production discards ~17% of clinical note text by stripping HTML to plaintext before storage; v2 preserves HTML and recovers the structural content | 2026-06-04 |
 | C-013 | confirmed | Stanford visits ingestion was complete in v1 — no data-loss bug analogous to C-011/C-012; the v1 converter captured CSN and core fields cleanly. v2 adds provenance tags and preserves the previously-dropped `_orgKey` (Stanford organisation token) and IsLocal flag | 2026-06-04 |
 | C-014 | confirmed | v1 stores medication name in `medicationReference.display` (731 of 739 MRs), not the FHIR-canonical `medicationCodeableConcept.text` (8 MRs) — entity-linking code must check both | 2026-06-04 |
-| C-015 | confirmed | The PMH section in a single UCSF clinical note contains 9+ real diagnoses (GERD 2002, Low back pain 2003, SVT, Bacterial overgrowth, Claudication, …) that have no corresponding Condition in v1; clinical notes are a richer source of patient problem list than v1's structured Condition store | 2026-06-04 |
+| C-015 | confirmed | Across 32 PMH-bearing UCSF notes, 9 unique diagnoses (incl. GERD 2002, Low back pain 2003, Bacterial overgrowth, Claudication, SVT) have no matching v1 Condition; after routing ANA-positive→Observation and Allergy→AllergyIntolerance, the true Condition gap is 7 | 2026-06-04 |
+| C-016 | confirmed | Vitals in clinical notes are 100% redundant with same-day Observations — perfect dedup target | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
@@ -413,10 +414,40 @@ The core hypothesis works for medications. A note that includes a "Current Medic
 
 ---
 
+### C-016 — Vital signs in clinical notes are 100% redundant with same-day Observations
+
+- **Status:** `confirmed` (2026-06-04, cumulative across all UCSF notes)
+- **Claim:** Of 108 UCSF clinical notes, 8 carry a "Vitals" table (the in-person visits where vitals are actually measured; telemedicine notes don't). Across those 8 notes, 32 individual vital-sign mentions (BP, Pulse, SpO2, Weight, Temp) were extracted. **Every single one (32/32, 100%) matched a same-day Observation** in v1's vital-signs corpus. Every note's vitals fully corresponded to a same-day Observation panel. Match deltas: 100% Δ=0 days.
+- **What it means:**
+  - **Perfect dedup target.** Vitals mentioned in notes are not new information — they are *the same canonical record* the structured Observation panel captured. The note quotes; the structured record is the source of truth.
+  - **Replace-with-reference is unambiguously safe** for vitals. No risk of losing data by inlining the reference: every value is already in the Observation.
+  - **Generalises the "same-day correspondence" pattern.** First seen in the medications prototype (tamsulosin ±0d for a fresh prescription at this visit), confirmed at scale for vitals. When a clinical event happens during a visit, the note and the structured record share a precise date — they're not parallel observations; they're the same observation rendered in two formats.
+- **Patients in sample:** 1
+- **Confidence:** Very high. 100% match rate on 32 measurements is not coincidental.
+- **Generalization risk:** Vitals are structurally simple (one metric, one numeric value, one timestamp). Labs may be similar but have richer reference ranges and units. Imaging won't follow this pattern.
+- **Implication for assistant code:** the existing assistant likely treats note-mentioned vitals and Observation vitals as parallel sources. Should be treated as one. Audit recommended.
+- **Re-evaluation trigger:** When applied to labs in DiagnosticReport / Observation. Or when applied across other portals (Stanford notes).
+
+---
+
 ### C-015 — Clinical notes' PMH section is a richer problem list than v1's structured Condition store
 
-- **Status:** `confirmed` (2026-06-04)
-- **Claim:** A single UCSF Office Visit note's "Past Medical History" table contains 30 entries; after filtering out comment-only sub-rows, ~22 are real diagnoses. Of those, only ~12-14 have matching `Condition` resources in v1's HAPI (40-47% match rate). The remaining ~9 are real, named clinical diagnoses (GERD with onset 2002, Low back pain with onset 2003, Bacterial overgrowth syndrome, Claudication, SVT [supraventricular tachycardia], ANA positive, Abdominal bloating, Skipped heart beats, Allergy-as-condition) that are present in the clinical note but **have no matching `Condition` resource in v1's structured store**.
+- **Status:** `confirmed` (2026-06-04, cumulative analysis across all 108 UCSF notes)
+- **Claim:** Across all 108 UCSF clinical notes in v2, 32 notes carry a "Past Medical History" table. After tightening the comment-row filter, the cumulative deduplicated diagnoses across those 32 notes number **22 unique normalised names**. 13 of them match a `Condition` in v1's HAPI (59%); **9 of them — every single one appearing in at least 2 notes, with 4 of them appearing in all 32 PMH-bearing notes — have no matching `Condition` in v1.** The gap is bounded but high-confidence-real. List, with note-recurrence and first-recorded date where present:
+
+  | Note recurrence | Date in PMH | Diagnosis |
+  |---|---|---|
+  | 32 / 32 | — | Abdominal bloating |
+  | 32 / 32 | — | ANA positive (note: a lab finding, routes to Observation not Condition) |
+  | 32 / 32 | — | Bacterial overgrowth syndrome |
+  | 32 / 32 | — | Skipped heart beats |
+  | 24 / 32 | Childhood | Allergy (umbrella; better modelled as AllergyIntolerance) |
+  | 24 / 32 | 2002 | GERD (gastroesophageal reflux disease) |
+  | 24 / 32 | 2003 | Low back pain |
+  | 15 / 32 | — | Claudication |
+  | 9 / 32 | — | SVT (supraventricular tachycardia) |
+
+  After routing "ANA positive" to Observation and "Allergy" to AllergyIntolerance, the true Condition gap is **7 diagnoses**. v1's Condition store would grow from 65 to 72.
 - **Why this matters:**
   - **Analogue of C-011 for problem lists.** v1's clinical reasoning (assistant, analyst, profile-builder) sees 65 Conditions; the actual clinician-curated problem list in a single note is materially larger. Across 108 notes the gap is likely substantially bigger.
   - **GERD (2002), Low back pain (2003), Paronychia (10/15/2015)** — entries in PMH carry precise onset dates that v1 doesn't have for the few Conditions it does store.
