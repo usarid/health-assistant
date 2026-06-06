@@ -170,7 +170,28 @@ def stanford_ahr_manifest():
     return manifest
 
 
+def _parse_human_date(s):
+    """Parse 'Feb 19, 2026' / 'Friday February 19, 2026' / '2026-02-19' to ISO date."""
+    if not s:
+        return None
+    s = s.strip()
+    # Strip leading weekday
+    s = re.sub(r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\s+', '', s)
+    formats = ['%Y-%m-%d', '%b %d, %Y', '%B %d, %Y', '%m/%d/%Y', '%m/%d/%y']
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except (ValueError, TypeError):
+            pass
+    # Last resort: take the first 10 chars if they look like ISO
+    if len(s) >= 10 and s[4] == '-' and s[7] == '-':
+        return s[:10]
+    return None
+
+
 def compare_stanford_notes(v3_path):
+    """Compare v3 Stanford notes against AHR's coverage manifest. Emits only
+    counts and aggregate stats — no per-item details (per P-PHI-STAYS-LOCAL)."""
     v3 = load_v3_output(v3_path)
     v3_notes = v3.get('notes') or []
     print(f'v3 Stanford notes captured: {len(v3_notes)}')
@@ -178,47 +199,42 @@ def compare_stanford_notes(v3_path):
     manifest = stanford_ahr_manifest()
     print(f'AHR Stanford coverage manifest: {len(manifest)} fingerprints')
 
-    # Build scraped fingerprints — try several shapes since Stanford's schema
-    # may differ from UCSF's; this lets us be robust to discovery surprises
-    scraped = {}
-    for e in v3_notes:
+    # v3 schema: each note's `item` IS a visits-result row. The visit details
+    # are at item.response (no `details` wrapper). RD entry is at item.item.
+    def v3_iso_date(e):
         item = e.get('item') or {}
-        resp = e.get('response') or {}
-        # CSN
-        csn = (item.get('response') or {}).get('details', {}).get('csn') or \
-              item.get('Csn') or \
-              resp.get('csn') or ''
-        # Date
-        date = item.get('Date') or \
-               (item.get('response') or {}).get('details', {}).get('encounterDate') or \
-               normalize_date(resp.get('date', '')) or ''
-        if isinstance(date, str):
-            date = normalize_date(date) or date
-        # Type
-        ntype = item.get('VisitTypeName') or item.get('EncounterType') or ''
-        key = (date, str(ntype), str(csn))
-        scraped[key] = e
+        resp = item.get('response') or {}
+        vs = resp.get('visitSummaryInfo') or {}
+        rd = item.get('item') or {}
+        for raw in (vs.get('encounterDate'), rd.get('Date'), rd.get('Instant')):
+            iso = _parse_human_date(raw)
+            if iso:
+                return iso
+        return None
 
-    print(f'v3 fingerprints emitted: {len(scraped)}')
-    # Pure CSN-only check too (more lenient — captures matches even if type/date differ)
-    manifest_csns = {csn for (d, t, csn) in manifest.keys() if csn}
-    scraped_csns = {csn for (d, t, csn) in scraped.keys() if csn}
+    v3_dates = [v3_iso_date(e) for e in v3_notes]
+    v3_dates_set = {d for d in v3_dates if d}
+    manifest_dates = {k[0] for k in manifest.keys() if k[0]}
+
+    # Note that CSNs cannot be matched across these two channels — AHR uses
+    # Epic's numeric internal CSN format; MyChart's API returns the encrypted
+    # "WP-24" URL-safe token. They are the same encounter keyed differently.
+    # Match by ISO date instead; aggregates only.
     print()
-    print('Coverage by CSN:')
-    print(f'  matched:    {len(manifest_csns & scraped_csns)}')
-    print(f'  AHR-only (scraping gap):       {len(manifest_csns - scraped_csns)}')
-    print(f'  scraped-only (newer than AHR): {len(scraped_csns - manifest_csns)}')
+    print('Coverage by encounter ISO date (date-only match, not per-note):')
+    print(f'  v3 distinct dates:        {len(v3_dates_set)}')
+    print(f'  AHR manifest dates:       {len(manifest_dates)}')
+    print(f'  dates in both:            {len(v3_dates_set & manifest_dates)}')
+    print(f'  AHR-only dates:           {len(manifest_dates - v3_dates_set)}')
+    print(f'  v3-only dates:            {len(v3_dates_set - manifest_dates)}')
 
-    gaps = manifest_csns - scraped_csns
-    if gaps:
-        # Show some examples
-        print()
-        print('First 10 AHR fingerprints not captured by v3 scrape:')
-        shown = 0
-        for (date, type_, csn), info in manifest.items():
-            if csn in gaps and shown < 10:
-                print(f'  {date}  {type_:30s}  csn={csn[:24]}…')
-                shown += 1
+    # AHR note types histogram for context
+    from collections import Counter
+    ahr_types = Counter(k[1] for k in manifest.keys() if k[1])
+    print()
+    print('AHR Stanford note types (count):')
+    for t, n in ahr_types.most_common(8):
+        print(f'  {n:>4d}  {t}')
 
 
 # ── Main ───────────────────────────────────────────────────────────────

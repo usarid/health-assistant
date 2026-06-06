@@ -1,0 +1,67 @@
+{
+  "_comment": "v3 config for Stanford MyChart. Validated end-to-end against the live portal on 2026-06-06 — 142 visits + 106 notes with content scraped. Stanford uses the same Epic MyChart API surface as UCSF (same instance number, same endpoint paths, same response shapes), differing only in base_path (Stanford uses /myhealth_sso, UCSF uses /UCSFMyChart). The branded patient-facing site at myhealth.stanfordhealthcare.org embeds Epic in a cross-origin iframe; the actual Epic MyChart lives at mychart.stanfordhealthcare.org/myhealth_sso/. After SSO from the wrapper, mychart.* cookies are set; navigating directly to mychart.stanfordhealthcare.org/myhealth_sso/Visits gives the runtime full access — but Stanford sets `body { display: none }` as a frame-busting protection, which the runtime must override (CSS override at runtime) before any UI it injects (e.g., the save button) is visible.",
+
+  "portal_id": "stanford.mychart",
+  "name": "Stanford MyHealth (via Epic MyChart)",
+  "base_path": "/myhealth_sso",
+  "host_match": ["mychart.stanfordhealthcare.org"],
+  "config_version": "stanford.v1.0",
+
+  "auth": {
+    "token_selector": "input[name=\"__RequestVerificationToken\"]",
+    "token_header": "__requestverificationtoken",
+    "page_nonce_regex": null
+  },
+
+  "jobs": {
+    "visits": {
+      "discovery": {
+        "mode": "epic_rendered_data",
+        "instance": 7,
+        "paginator": {
+          "type": "click_until_gone",
+          "button_text": "load more past visits",
+          "max_iterations": 50,
+          "settle_ms": 200,
+          "wait_for_growth_ms": 6000
+        }
+      },
+      "filter": { "path_equals": ["IsLocal", true] },
+      "endpoint": {
+        "path": "/api/visits/past-details/GetVisitDetailsPast",
+        "method": "POST",
+        "body_template": {
+          "csn": "{item.Csn}",
+          "eorgID": ""
+        }
+      },
+      "max_concurrency": 1,
+      "rate_limit_ms": 80
+    },
+
+    "notes": {
+      "depends_on": "visits",
+      "discovery": { "mode": "from_dependency" },
+      "filter": {
+        "and": [
+          { "path_equals": ["response.notesInfo.isAtLeastOneNoteShareable", true] },
+          "response.notesInfo.notesReport.reportID"
+        ]
+      },
+      "endpoint": {
+        "path": "/api/report-content/LoadReportContent",
+        "method": "POST",
+        "body_template": {
+          "reportMnemonic": "{item.response.notesInfo.notesReport.reportMnemonic}",
+          "reportID": "{item.response.notesInfo.notesReport.reportID}",
+          "csn": "{item.response.csn?}",
+          "isFullReportPage": false,
+          "uniqueClass": "EID-{auto_seq}",
+          "nonce": "{auto_nonce}"
+        }
+      },
+      "max_concurrency": 1,
+      "rate_limit_ms": 80
+    }
+  }
+}
