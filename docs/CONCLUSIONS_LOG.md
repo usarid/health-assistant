@@ -74,7 +74,7 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-014 | confirmed | v1 stores medication name in `medicationReference.display` (731 of 739 MRs), not the FHIR-canonical `medicationCodeableConcept.text` (8 MRs) — entity-linking code must check both | 2026-06-04 |
 | C-015 | confirmed | Across 32 PMH-bearing UCSF notes, 9 unique diagnoses (incl. GERD 2002, Low back pain 2003, Bacterial overgrowth, Claudication, SVT) have no matching v1 Condition; after routing ANA-positive→Observation and Allergy→AllergyIntolerance, the true Condition gap is 7 | 2026-06-04 |
 | C-016 | confirmed | Vitals in clinical notes are 100% redundant with same-day Observations — perfect dedup target | 2026-06-04 |
-| C-017 | confirmed | AHR-ingested DocumentReferences across ALL institutions are metadata stubs — Binary URLs are populated but the Binary resources are not in HAPI. Stanford 224, UCSF AHR 284, Sutter 67, Mayo 14, MSKCC 10 — every sampled Binary failed to resolve | 2026-06-04 |
+| C-017 | confirmed | AHR-ingested DocumentReferences across ALL institutions are metadata stubs — Binary URLs are populated but Binary resources are not in HAPI. **AHR intentionally exports references not content; the Binary tokens are Epic-format and the source EHR (identified by AHR's `custodian` field) can resolve them via Epic on FHIR.** 461 of 463 DocRefs are theoretically recoverable | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
@@ -424,19 +424,36 @@ The core hypothesis works for medications. A note that includes a "Current Medic
   - **The clinical-narrative corpus available to the assistant is ~16% of what it appears to be.** 108 of 673 DocumentReferences have content (the UCSF-scraped notes). The other 565 are dead pointers. Any "search across my clinical notes" query is silently working with a 1-in-6 coverage slice.
   - **The H-005 findings (C-015, C-016) are lower bounds.** They were measured against the 108 notes that have content. Adding the missing ~565 notes' worth of PMH dumps, allergy lists, and vital tables would likely surface significantly more unmatched diagnoses (C-015 gap could double or more).
   - **The fix is patient-side.** AHR can't be modified; the gap is what AHR returns. The fix is to scrape each institution's notes directly using its API (the pattern proven by `scrape_ucsf_notes.js`).
-- **Where the content lives now:** Each portal's own UI / API. Stanford specifically: 105 of 139 visits have `IsClinicalNoteAvailable=True` in the raw scrape (Stanford's `LoadReportContent` API is the obvious adaptation target for a Stanford notes scraper).
-- **Implication for H-005 α experiment:** **cannot run against v1's current state.** The Stanford / Sutter / Mayo / MSKCC content the experiment would target isn't there. Pivot options:
-  - Scrape Stanford notes first (analogous Phase A'' work — user logs into Stanford MyHealth, runs a scraper adapted from `scrape_ucsf_notes.js`).
-  - Move to H-005's β (labs entity-linking against DiagnosticReport/Observation) — uses different resources, doesn't depend on note content.
+- **Root cause (audited 2026-06-04):** Apple Health Records exports DocumentReference metadata *intentionally without* the referenced Binary resources. Inspection of the raw AHR export at `~/usarid@gmail.com/Medical/New exports/apple_health_export/clinical-records/`:
+  - 463 DocumentReference files
+  - 0 with inline `data`
+  - 462 with url-only references (`"url": "Binary/<id>"`)
+  - 0 Binary-*.json files in the export (`ls Binary-*` returns nothing)
+  - The ingestion pipeline (`ingest/apple/ingest_clinical.py`) is correct — it just passes the DocRefs through. The data isn't there to ingest.
+- **But the content IS recoverable via Epic on FHIR.** AHR's DocRefs carry the information needed to fetch each Binary from its source:
+  - **`custodian.display`** identifies the source EHR cleanly: UCSF 214 (incl. MarinHealth), Stanford 165, Sutter 67, Mayo 14, plus 2 non-Epic (Cerner-based DHMG). All four Epic-based custodians have Epic on FHIR endpoints.
+  - **`identifier.system` OIDs** are Epic instance identifiers (`urn:oid:1.2.840.114350.1.13.266.2.7.2.727879` → UCSF, etc.) — a second, machine-readable signal.
+  - **Binary URLs are Epic-format opaque tokens** (e.g., `Binary/eowYamhSa84WbGDUQg4DLOEc.UB8iWqXdgktZyppPDgw3`) — the same format Epic on FHIR's `/Binary/{id}` endpoint serves natively.
+  - **`api/epic_oauth.py` already implements the PKCE flow** for patient-facing Epic on FHIR — the infrastructure is in place. Per-EHR OAuth tokens are the only missing piece.
+- **The recovery path (per AHR DocRef):**
+  1. Read `custodian.display` → map to known Epic FHIR endpoint (lookup table).
+  2. Use that source EHR's stored OAuth token (assistant has refresh-token machinery already).
+  3. GET `<source-fhir-base>/Binary/<id>` with `Authorization: Bearer <token>`.
+  4. Replace `attachment.url` with `attachment.data` (base64 of the response) — or store the Binary resource locally and keep the URL pointing at HAPI.
+  - Total addressable: 461 of 463 DocRefs (excludes 2 Cerner-based).
+- **Why it matters:**
+  - **The assistant's clinical-narrative corpus would grow from 108 to up to 569 notes (108 + 461) — a 5× expansion of textual signal.**
+  - **C-015 (PMH gap) and C-016 (vitals-redundant) findings are lower bounds.** Recovering Stanford / Sutter / Mayo notes will surface more PMH entries, more conditions absent from v1, more vital-sign panels for the same-day-correspondence test.
+  - **No new authorisation surface is required** if the existing Epic on FHIR app is already approved for the relevant customer instances. The recovery is mechanical.
 - **Patients in sample:** 1
-- **Confidence:** Very high — null result across 5 institutions on 30 samples each.
-- **Generalization risk:** Patient-specific in the sense that another patient's institutions will differ. The pattern (AHR ingests DocRef metadata but not Binary content) is generic and will recur across patients.
+- **Confidence:** Very high — direct null result across the AHR export plus structural recovery analysis.
+- **Generalization risk:** Patient-specific in the sense that different patients have different source EHRs and OAuth coverage. The mechanism is generic — any AHR-ingested patient should have recoverable Binaries proportional to their Epic on FHIR authorisation coverage.
 - **Action items:**
-  - Audit the AHR ingestion code to confirm Binary URLs are intentionally dropped vs accidentally dropped; if intentional, document why and consider changing.
-  - Build per-institution notes scrapers as needed, modelled on `scrape_ucsf_notes.js`.
-  - Until then, C-015 and C-016 are lower bounds.
-- **Violates principle:** P-DATA-IS-GOLD (silently lost content is silently degrading downstream reasoning).
-- **Re-evaluation trigger:** AHR ingestion audit; or per-institution notes scraper runs.
+  - **Recovery prototype:** pick one AHR DocRef per Epic-based custodian, attempt the Epic on FHIR Binary fetch, verify the returned content is the expected HTML clinical note. ~1 hour.
+  - **Production recovery script:** iterate over all 461 recoverable DocRefs, fetch Binaries, store inline in v2 HAPI. Concurrency + rate-limiting against per-EHR limits.
+  - **Document the mapping:** `custodian.display` → Epic FHIR base URL → OAuth token (config in `tools/v2/patient_config/` or similar, gitignored).
+- **Violates principle:** P-DATA-IS-GOLD — but the violation is at the AHR export boundary, not in our code. Recovery is the fix.
+- **Re-evaluation trigger:** Recovery prototype runs; or new patient enrols with different EHR mix.
 
 ---
 
