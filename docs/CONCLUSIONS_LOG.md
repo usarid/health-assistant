@@ -40,6 +40,24 @@ Why this matters:
 
 Currently aspirational — the system doesn't do this yet. See H-005 for the testable claim and design questions.
 
+### P-CHANNEL-SCOPE-DISCIPLINE
+
+Each data channel has a usable scope. Use it within that scope; don't try to extract what the channel doesn't actually deliver.
+
+Specifically for Apple Health Records: AHR delivers two distinct things:
+
+1. **Wearable / device data with full content** (Oura, Apple Watch, Conneqt blood pressure cuff, etc.) — this is a primary source. AHR is in fact the *only* clean channel for some of it.
+2. **Clinical record metadata with no content** — DocumentReferences, Encounters, Conditions, etc. whose authoritative content lives in the source EHR and which AHR exports as references rather than payloads (C-017).
+
+The clinical-record metadata is **not a content source.** It is a **coverage manifest** — a list of the clinical artefacts the source EHR knows about, useful for verifying that direct portal scraping has captured all of them. If AHR lists 165 Stanford notes from 2020-2025 and the Stanford v3 scrape captures only 140, the missing 25 are a scraping gap to investigate; they are not "documents we already have."
+
+This principle prevents the trap of pattern-matching on what a channel *appears* to offer (DocRefs! Binaries! 5× corpus expansion!) and chasing a recovery path that doesn't exist. We fell into this on 2026-06-04 — the initial C-017 framing routed AHR Binary recovery through Epic on FHIR (vendor-approval path measured in weeks per customer) before the user's correction surfaced the simpler fact: portal scraping is the recovery path we'd already chosen for everything else. See C-018 for the corrected operational pattern.
+
+Operational implications:
+- **Document each channel's scope** in the data-acquisition strategy — what it actually delivers, not what its surface API suggests.
+- **Where a metadata channel overlaps a content channel,** the metadata channel becomes a completeness check on the content channel. Treat it as such; don't re-process its references as if they were content.
+- **New recovery proposals must be tested against "what does this channel actually deliver?"** before infrastructure is designed around them.
+
 ### P-STRUCTURED-FIRST
 
 Prefer structured extraction over text re-parsing. When source data has structure — HTML DOM, JSON fields, FHIR resources, XML — scrapers must preserve that structure into the raw export. Rendering structured content to a textContent blob and then re-parsing it downstream loses information at the extraction step and creates a fragile sub-system of pattern-matching that scales poorly across patients, portal versions, and resource types.
@@ -74,7 +92,8 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-014 | confirmed | v1 stores medication name in `medicationReference.display` (731 of 739 MRs), not the FHIR-canonical `medicationCodeableConcept.text` (8 MRs) — entity-linking code must check both | 2026-06-04 |
 | C-015 | confirmed | Across 32 PMH-bearing UCSF notes, 9 unique diagnoses (incl. GERD 2002, Low back pain 2003, Bacterial overgrowth, Claudication, SVT) have no matching v1 Condition; after routing ANA-positive→Observation and Allergy→AllergyIntolerance, the true Condition gap is 7 | 2026-06-04 |
 | C-016 | confirmed | Vitals in clinical notes are 100% redundant with same-day Observations — perfect dedup target | 2026-06-04 |
-| C-017 | confirmed | AHR-ingested DocumentReferences across ALL institutions are metadata stubs — Binary URLs are populated but Binary resources are not in HAPI. **AHR intentionally exports references not content; the Binary tokens are Epic-format and the source EHR (identified by AHR's `custodian` field) can resolve them via Epic on FHIR.** 461 of 463 DocRefs are theoretically recoverable | 2026-06-04 |
+| C-017 | confirmed | AHR-ingested DocumentReferences across ALL institutions are metadata stubs — Binary URLs are populated but Binary resources are not in HAPI. AHR intentionally exports references not content. Treat as coverage manifest (per C-018 + P-CHANNEL-SCOPE-DISCIPLINE), not as a recovery target | 2026-06-04 |
+| C-018 | confirmed | AHR clinical-record DocRefs are best used as a coverage manifest against direct portal scrapes — diff what AHR lists against what the scrapers captured to surface portal-scraping gaps | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
@@ -412,6 +431,30 @@ The core hypothesis works for medications. A note that includes a "Current Medic
 - **Confidence:** High.
 - **Generalization risk:** Stanford visits handled well in v1 doesn't mean Stanford test results / UCSF visits / etc. will be. The next conversion (Stanford test results) is the relevant next data point.
 - **Re-evaluation trigger:** When v2 expands to other resource types or to patient N+1.
+
+---
+
+### C-018 — Use AHR clinical-record DocRefs as a coverage manifest for portal scraping, not as a content source
+
+- **Status:** `confirmed` (2026-06-04). Carries principle P-CHANNEL-SCOPE-DISCIPLINE. Supersedes C-017's earlier "recover via Epic on FHIR" framing.
+- **Claim:** The 461 AHR-ingested DocumentReferences whose Binary content is unreachable (C-017) should not be a target for content recovery. They are best used as a **coverage manifest**: each carries enough metadata (`custodian` = source EHR, `type.text` = note type, `date` = encounter date, `context.encounter` = CSN if present, `author` = clinician) to fingerprint the clinical artefact. After a portal v3 scrape lands its notes, diff AHR's manifest against what the scrape captured for that same source EHR:
+  - **AHR fingerprint matched by a scraped note** → coverage confirmed for that artefact.
+  - **AHR fingerprint with no matching scraped note** → scraping gap; investigate (the scraper may have missed a CSN, filtered it out, or hit an `IsClinicalNoteAvailable=false` row).
+  - **Scraped note with no matching AHR fingerprint** → the scrape captured something AHR didn't (typically newer than the most recent AHR sync — a healthy signal).
+- **Why this matters:**
+  - **Prevents repeated chasing of an unreachable recovery target.** The Binary URLs in AHR DocRefs look like fetchable resources; the principle P-CHANNEL-SCOPE-DISCIPLINE codifies why they aren't.
+  - **Turns AHR's metadata into ongoing scraper-completeness QA.** Every time the user re-syncs AHR, the manifest grows; every time we re-scrape a portal, we have a fresh check against it. Drift is visible.
+  - **Generalises to other reference-only channels.** TEFCA IAS (per earlier strategic discussion) may have similar shape — a list of available documents at participating providers, with content delivery via separate endpoints. Same coverage-manifest pattern applies.
+- **Fingerprint key for diffing:** `(custodian, type.text, date, context.encounter.identifier.value)` is unique enough at N=1; production would also fall back to fuzzy match on `(author + date + type)` when the encounter identifier is absent.
+- **Patients in sample:** 1
+- **Confidence:** High for the operational pattern. Untested for false-match rates at scale.
+- **Generalization risk:** AHR DocRef field availability may vary across patients (e.g., a patient with no Stanford history won't have Stanford fingerprints). The pattern is robust to absence; it's the diff that matters.
+- **Action items (when v3 Stanford config exists and runs):**
+  - Build the manifest from AHR's 165 Stanford DocRefs.
+  - Build the captured-set from the v3 Stanford scrape output.
+  - Emit the diff. Each missing-from-scrape entry is a scraping bug to triage.
+  - Add the same loop to the diff_communications / diff_notes harness in `tools/v2/`.
+- **Re-evaluation trigger:** When v3 Stanford config is filled in and the first scrape runs.
 
 ---
 
