@@ -1,0 +1,60 @@
+{
+  "_comment": "Stanford MyHealth template. To complete: log into MyHealth.Stanford.edu, open DevTools, follow the discovery procedure in tools/v3/README.md, replace each TODO with the captured value. Per C-017 this is the path to recover Stanford's ~165 unscraped clinical notes (the IsClinicalNoteAvailable=True visits from stanford_visits_raw.json).",
+
+  "portal_id": "stanford.myhealth",
+  "name": "Stanford MyHealth",
+  "base_path": "/MyHealth",
+  "host_match": ["myhealth.stanford.edu", "myhealth.stanfordhealthcare.org"],
+  "config_version": "stanford.v0-template",
+
+  "auth": {
+    "_comment": "The anti-forgery-token pattern is universal across Epic-based portals. If Stanford uses a different selector or header (unlikely), update here. Verify by inspecting any XHR request from MyHealth in DevTools Network tab.",
+    "token_selector": "input[name=\"__RequestVerificationToken\"]",
+    "token_header": "__requestverificationtoken",
+    "page_nonce_regex": null
+  },
+
+  "jobs": {
+    "visits": {
+      "_comment": "Stanford's visits list lives in an Epic SPA component. UCSF uses instance 7; Stanford's number may differ. To find it: in DevTools console run `Epic.PatientAccess.Components.__Instances.map((x,i)=>({i,t:x?.constructor?.name,n:x?.RenderedData?.length}))` and look for the one whose RenderedData length matches the visit count visible in the UI.",
+      "discovery": {
+        "mode": "epic_rendered_data",
+        "instance": "TODO: discover via console probe described above"
+      },
+      "filter": "item.IsLocal === true",
+      "endpoint": {
+        "_comment": "Stanford's visit-detail endpoint path may differ from UCSF's. To find: click a visit in the UI; in DevTools Network tab note the POST that returns the visit details JSON; copy its path here, and inspect the body to confirm the fields below match.",
+        "path": "TODO: e.g. /api/visits/past-details/GetVisitDetailsPast — verify in Network tab",
+        "method": "POST",
+        "body_template": {
+          "csn": "{item.Csn}",
+          "eorgID": ""
+        }
+      },
+      "max_concurrency": 1,
+      "rate_limit_ms": 200
+    },
+
+    "notes": {
+      "_comment": "Stanford's note-content endpoint analogous to UCSF's LoadReportContent. Same discovery procedure as for visits above: click a visit with a note, expand the note, capture the POST.",
+      "depends_on": "visits",
+      "discovery": { "mode": "from_dependency" },
+      "filter": "TODO: the path in the visit-details response where notesInfo lives may differ from UCSF; inspect a Stanford visit-details response to confirm the path under item.response",
+      "endpoint": {
+        "path": "TODO: e.g. /api/report-content/LoadReportContent — verify in Network tab",
+        "method": "POST",
+        "body_template": {
+          "_comment": "Stanford may not require all UCSF fields, and may require additional ones. Map by inspecting a real request body.",
+          "reportMnemonic": "TODO: item path to reportMnemonic",
+          "reportID": "TODO: item path to reportID",
+          "csn": "{item.Csn}",
+          "isFullReportPage": false,
+          "uniqueClass": "EID-{auto_seq}",
+          "nonce": "{auto_nonce}"
+        }
+      },
+      "max_concurrency": 1,
+      "rate_limit_ms": 200
+    }
+  }
+}

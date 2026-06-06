@@ -1,0 +1,55 @@
+{
+  "_comment": "Reference v3 config for UCSF MyChart. Behaviour is equivalent to running ingest/scrapers/scrape_ucsf_visits.js followed by scrape_ucsf_notes.js. See tools/v3/configs/_schema.md for the schema spec.",
+
+  "portal_id": "ucsf.mychart",
+  "name": "UCSF MyChart",
+  "base_path": "/UCSFMyChart",
+  "host_match": ["mychart.ucsf.edu"],
+  "config_version": "ucsf.v1",
+
+  "auth": {
+    "token_selector": "input[name=\"__RequestVerificationToken\"]",
+    "token_header": "__requestverificationtoken",
+    "page_nonce_regex": null
+  },
+
+  "jobs": {
+    "visits": {
+      "discovery": {
+        "mode": "epic_rendered_data",
+        "instance": 7
+      },
+      "filter": "item.IsLocal === true",
+      "endpoint": {
+        "path": "/api/visits/past-details/GetVisitDetailsPast",
+        "method": "POST",
+        "body_template": {
+          "csn": "{item.Csn}",
+          "eorgID": ""
+        }
+      },
+      "max_concurrency": 1,
+      "rate_limit_ms": 200
+    },
+
+    "notes": {
+      "depends_on": "visits",
+      "discovery": { "mode": "from_dependency" },
+      "filter": "item.response.details && item.response.details.notesInfo && item.response.details.notesInfo.isAtLeastOneNoteShareable === true && item.response.details.notesInfo.notesReport && item.response.details.notesInfo.notesReport.reportID",
+      "endpoint": {
+        "path": "/api/report-content/LoadReportContent",
+        "method": "POST",
+        "body_template": {
+          "reportMnemonic": "{item.response.details.notesInfo.notesReport.reportMnemonic}",
+          "reportID": "{item.response.details.notesInfo.notesReport.reportID}",
+          "csn": "{item.response.details.csn?}",
+          "isFullReportPage": false,
+          "uniqueClass": "EID-{auto_seq}",
+          "nonce": "{auto_nonce}"
+        }
+      },
+      "max_concurrency": 1,
+      "rate_limit_ms": 200
+    }
+  }
+}
