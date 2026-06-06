@@ -40,6 +40,23 @@ Why this matters:
 
 Currently aspirational — the system doesn't do this yet. See H-005 for the testable claim and design questions.
 
+### P-PHI-STAYS-LOCAL
+
+Scraped clinical content must not travel through the AI conversation channel. Data flows browser → local file (or browser → BinaHealth backend) → structured store. The AI assistant queries the structured store and sees only what its specific query returns. Raw scrape payloads, full note HTML, message bodies, lab result panels — none of these belong in the AI's context window as bulk content.
+
+Why this is a principle, not just a practice:
+- **Safety filters at the AI provider correctly flag bulk PHI** moving through their channel — exactly the block the user surfaced 2026-06-06 when an over-3-MB JSON of scraped UCSF clinical notes was about to be chunk-returned through `javascript_tool`. The block was the right behaviour; my approach was wrong.
+- **The AI's value is shaping pipelines and analysing aggregates, not transporting payloads.** The existing assistant queries HAPI FHIR on the user's behalf and synthesises an answer — the raw FHIR resources never travel as user-visible content; only the shaped natural-language response does. That asymmetry is the right design.
+- **Scaling: per-user PHI volume is unbounded; AI per-turn budget is not.** A patient with 10 years of records will overwhelm any reasonable context. Bulk → backend; queries → AI.
+
+Operational implications:
+- **Dev workflow.** v3 testing pulls scraped JSON into a local file (Chrome save, file-download, or a local-server POST endpoint), then runs analysis scripts whose *summaries* (counts, deltas, distributions, structural facts) can come back through the AI channel. Never the raw bodies.
+- **Mobile app architecture.** WebView scrapes → app stores locally → POSTs to BinaHealth backend over user's own TLS — that's the data path. The AI conversation is a separate channel that queries the structured store via existing FHIR-querying tools.
+- **Comparison and triage tools** in `tools/v2/` and `tools/v3/` should emit only aggregate stats, paths, counts, and IDs — never embedded clinical text — so their output is safely returnable through any channel.
+- **When PHI accidentally reaches a place it shouldn't**, treat the block / alert as confirming the policy worked, not as friction to route around. Clean up (clear browser memory, etc.), re-route through the local-file path.
+
+This complements P-DATA-IS-GOLD (preserve data) and P-CHANNEL-SCOPE-DISCIPLINE (each channel within its scope) — those are about completeness and recovery; this one is about where data is allowed to flow.
+
 ### P-CHANNEL-SCOPE-DISCIPLINE
 
 Each data channel has a usable scope. Use it within that scope; don't try to extract what the channel doesn't actually deliver.
