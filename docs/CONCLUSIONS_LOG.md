@@ -71,11 +71,12 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 | C-011 | confirmed | v1 production silently lost ~80% of MSKCC message content by loading from preview-only file instead of full-nested-message file | 2026-06-04 |
 | C-012 | confirmed | v1 production discards ~17% of clinical note text by stripping HTML to plaintext before storage; v2 preserves HTML and recovers the structural content | 2026-06-04 |
 | C-013 | confirmed | Stanford visits ingestion was complete in v1 — no data-loss bug analogous to C-011/C-012; the v1 converter captured CSN and core fields cleanly. v2 adds provenance tags and preserves the previously-dropped `_orgKey` (Stanford organisation token) and IsLocal flag | 2026-06-04 |
+| C-014 | confirmed | v1 stores medication name in `medicationReference.display` (731 of 739 MRs), not the FHIR-canonical `medicationCodeableConcept.text` (8 MRs) — entity-linking code must check both | 2026-06-04 |
 | H-001 | hypothesis | The Epic `WP-24…` thread token is portable: identical across portals for the same underlying conversation | 2026-05-31 |
 | H-002 | hypothesis | Native portal scrape yields strictly more information per conversation than the same conversation viewed via a linked-accounts aggregator | 2026-05-29 |
 | H-003 | hypothesis | "Strong aggregator" status is an Epic customer configuration property, not patient-specific; the same portal aggregates the same way for any patient | 2026-05-29 |
 | H-004 | hypothesis | Apple Health Records and MyChart scraping return overlapping but not subset/superset clinical-note coverage for the same institution | 2026-05-29 |
-| H-005 | hypothesis | Doctor's notes can be de-duplicated against structured data via entity linking + temporal matching, with quoted dumps replaced by typed references to canonical resources (carries P-DEDUP-CARRY-PROVENANCE) | 2026-06-04 |
+| H-005 | partial-confirmation | Doctor's notes can be de-duplicated against structured data via entity linking + temporal matching, with quoted dumps replaced by typed references to canonical resources (carries P-DEDUP-CARRY-PROVENANCE) — empirical prototype 2026-06-04 confirmed mechanism for medications | 2026-06-04 |
 
 ---
 
@@ -302,7 +303,59 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 
 ### H-005 — Hypothesis: doctor's notes can be de-duplicated via entity linking + temporal matching, with quoted dumps replaced by typed references
 
-- **Status:** `hypothesis` (2026-06-04). Carries principle P-DEDUP-CARRY-PROVENANCE.
+- **Status:** `partial-confirmation` (prototype 2026-06-04). Carries principle P-DEDUP-CARRY-PROVENANCE.
+
+**Empirical results from medication-extraction prototype (`tools/v2/h005_med_entity_linking.py`, 2026-06-04):**
+
+Tested against a single UCSF Office Visit note (`docref-ucsf-b7a8f3cc8c22`, 184 KB HTML, 25 tables, 16 KB stripped text, dated 2024-10-03).
+
+- **Extraction:** 22 unique candidate medication strings extracted from all table cells using two heuristics — Epic mixed-case detection (`[a-z][A-Z]`) and dose-form suffix detection (`\d+\s*(mg|mcg|...) (tablet|capsule|...)`). Of the 22, ~14 are real meds and ~8 are SIG strings ("Take 1 tablet by mouth twice daily") that the heuristic incorrectly picked up.
+- **Match rate:** 14 of 22 candidates (64%) had at least one exact match against v1's MedicationRequest corpus by normalised-name. After excluding the SIG-string false positives, **the match rate on real medications was ~14 of ~14 (essentially 100%)**.
+- **Multi-match resolution:** each name typically matched many MRs (e.g., losartan → 22 MRs, atorvastatin → 22, bortezomib → 25), because the patient has been prescribed each medication multiple times over years.
+- **Date-aware selection works.** Picking the MR with `authoredOn` closest to the note date produces sensible "best matches":
+  - tamsulosin: ±0 days (prescribed at this exact visit)
+  - losartan: ±6 days (same prescription cycle)
+  - atorvastatin: ±48 days, amlodipine: ±70 days, propranolol: ±150 days
+  - aspirin/clopidogrel: ±272 days (older active regimen)
+- **All 739 v1 MRs have `authoredOn`** populated (100%), so temporal matching is universally available.
+
+**What this means for H-005:**
+
+The core hypothesis works for medications. A note that includes a "Current Medications" or "Patient-reported Medications" table can be processed into a list of typed `MedicationRequest` references with high fidelity. The replacement output ("Patient is currently on [MedicationRequest:e9H0wcP7rXlk1erKgzLyzgns] (losartan), [MedicationRequest:e7x3VCzBN9LHAMx1GSy.8AOM] (tamsulosin), …") preserves the doctor's clinical reasoning context without re-storing the dose-form-sig text.
+
+**Production gaps (known after prototype, not yet built):**
+
+1. **Cell filtering.** The SIG strings that leaked in are easy to filter once we know the pattern ("Take" / "by mouth" / numbered-quantity prefix). Estimate: small fix.
+2. **Multi-ingredient combinations.** "ascorbic acid, vitamin C" and "cholecalciferol, vitamin D3" failed because normalisation kept trailing commas. Needs splitting on commas and trying each component.
+3. **Brand→generic crosswalk.** Currently works only because Epic stores both the generic + brand (e.g., "losartan (COZAAR)") so the generic survives normalisation. If a note had only brand text ("COZAAR 50 mg tablet"), match would fail. RxNorm lookup needed.
+4. **Strength validation.** A match on "amlodipine" might be the wrong amlodipine MR if doses differ. Need to compare dose-form from the note cell against the matched MR's strength.
+5. **Cross-resource pattern.** This validates medications. The same approach for AllergyIntolerance (Allergies table), Condition (Past Medical History table), and Procedure (Surgical History table) should work — each note we inspected has those tables. Worth a follow-up prototype.
+
+**Surprises along the way:**
+
+- v1 stores med names in `medicationReference.display`, not `medicationCodeableConcept.text` — see C-014. The first prototype run found 7 distinct names; switching fields found 214.
+- Epic's mixed-case formatting (amLODIPine, hydroCHLOROthiazide) is preserved both in the note HTML AND in v1's stored MR text — match is essentially free, no case normalisation needed.
+- The patient's medication history is dense (22 losartan MRs, 22 atorvastatin MRs) — date-based selection isn't optional; without it the reference is ambiguous.
+- The note's "Current Medications" list is a *snapshot* of the patient's regimen, not a list of just-prescribed orders. Some meds matched ±0 days (prescribed at this visit), most matched 1-9 months (ongoing regimen). This is correct clinical workflow — the note describes the state at the moment of authorship.
+- 27 tables in a single note. The note isn't just prose — it's a heavily structured document with embedded clinical data dumps. Entity-linking on tables is the high-leverage surface; prose-level extraction is the long tail.
+
+**Status remains `partial-confirmation`** because:
+- Tested on N=1 patient, N=1 note, single resource type (medications).
+- Production gaps above need closing before the replace-with-reference output is reliable enough to ship.
+- Need to validate on other resource types (allergies, conditions, procedures) and other portals (Stanford, MSKCC have notes too).
+
+**Next prototype experiments worth running** (in approximate decreasing value):
+
+1. Same approach against the Allergies and Past Medical History tables — different resource types, different match quality.
+2. Apply across all 18 UCSF Office Visit notes, measure aggregate match rate.
+3. Compare structured-table extraction against prose-level extraction in the same note (does prose add anything tables don't already capture, or is it pure redundancy?).
+4. Build the actual "replace-with-reference" rendering and inspect for readability.
+
+- **Re-evaluation trigger:** Any of the above experiments produces a meaningfully different result. Or new patient enrols.
+
+---
+
+### H-001 — Hypothesis: Epic `WP-24…` thread tokens are portable across portals
 - **Claim:** When ingesting a clinical note that contains a "Recent labs:" dump, a problem list snapshot, a medication list, or a quoted prior message, the duplicative content can be:
   1. Identified via structured-data lookups (LOINC matching for labs, ICD-10/SNOMED for problems, RxNorm for medications, message identifiers for quotes).
   2. Temporally bounded (date-of-note ± window, matched against existing resources' effective dates).
@@ -345,6 +398,21 @@ This principle was prompted by `tools/v2/convert_messages.py`'s regex iterations
 - **Confidence:** High.
 - **Generalization risk:** Stanford visits handled well in v1 doesn't mean Stanford test results / UCSF visits / etc. will be. The next conversion (Stanford test results) is the relevant next data point.
 - **Re-evaluation trigger:** When v2 expands to other resource types or to patient N+1.
+
+---
+
+### C-014 — v1 stores medication name in `medicationReference.display`, not the FHIR-canonical text field
+
+- **Status:** `confirmed` (2026-06-04)
+- **Claim:** v1 production's MedicationRequest resources put the human-readable medication name in `medicationReference.display` (731 of 739 MRs, 99%) rather than in `medicationCodeableConcept.text` (8 of 739, 1% — mostly patient-entered/patient-reported additions). 717 of 739 also carry a `contained[]` Medication resource with full ATC + RxNorm coding. Any text-based entity-linking pass that only consults `medicationCodeableConcept.text` will see essentially empty data.
+- **Why this matters:**
+  - **Direct cost of the C-009 / P-DATA-IS-GOLD pattern.** An H-005 prototype that checked only the canonical FHIR field initially saw 7 distinct med names from 739 MRs; after also checking `medicationReference.display`, it found 214 distinct names. The text was always there — just in a different field than the obvious one.
+  - **Future H-005 production code must read both** `medicationReference.display` and `medicationCodeableConcept.text`, and ideally also walk into `contained[].code.coding` for RxNorm-coded entity linking once an RxNorm crosswalk is wired in.
+  - **Existing API consumers (the assistant, the analyst)** likely have analogous gaps — code expecting the canonical place will under-count medications. Worth auditing.
+- **Patients in sample:** 1
+- **Confidence:** High — direct query against HAPI.
+- **Generalization risk:** Other resource types may have analogous storage-shape surprises. For Observation we know the canonical place (`valueQuantity` / `code`) is used; for AllergyIntolerance / Condition / Procedure we haven't checked.
+- **Re-evaluation trigger:** When the H-005 prototype is generalised to other resource types or when API consumers are audited.
 
 ---
 
