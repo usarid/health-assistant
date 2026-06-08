@@ -337,8 +337,13 @@
   // ── Keepalive ────────────────────────────────────────────────────────
   // Long scrapes (e.g. ~100 visits at ~10s each) outrun the portal's idle
   // session timeout. Every portal we care about exposes a keepalive endpoint
-  // that, when pinged, resets the inactivity timer. We hit it via Image GET
-  // so no CORS preflight; cookies ride along automatically.
+  // that, when pinged, resets the inactivity timer.
+  //
+  // IMPORTANT (2026-06-08 finding): Image() GET to Stanford's keepalive.asp
+  // returns 503 — the server rejects it (likely Accept header / no
+  // image-bytes response). fetch() with credentials:'include' returns 200.
+  // Use fetch(); track success/failure per tick to surface broken endpoints
+  // early instead of running a silent no-op for the whole scrape.
   //
   // Some portals (Stanford especially) have INDEPENDENT session timers per
   // origin (the wrapper at myhealth.* and the API host at mychart.* each
@@ -356,21 +361,35 @@
     }
     const intervalMs = authCfg.keepalive_interval_ms || 60000;
     let pings = 0;
-    const tick = () => {
+    const results = {};  // url → {ok, fail, lastStatus}
+    for (const u of urls) results[u] = { ok: 0, fail: 0, lastStatus: null };
+    const tick = async () => {
       pings++;
       const noCache = Math.random();
       for (const u of urls) {
-        // Append cache-buster so the browser doesn't return a 304
         const sep = u.includes('?') ? '&' : '?';
-        new Image().src = u + sep + 'cnt=' + pings + '&noCache=' + noCache;
+        const fullUrl = u + sep + 'cnt=' + pings + '&noCache=' + noCache;
+        try {
+          const r = await fetch(fullUrl, { method: 'GET', credentials: 'include', mode: 'cors' });
+          results[u].lastStatus = r.status;
+          if (r.ok) results[u].ok++; else results[u].fail++;
+        } catch (e) {
+          results[u].lastStatus = 'err';
+          results[u].fail++;
+        }
       }
     };
-    tick();  // immediate first ping so we don't have to wait intervalMs
+    tick();  // immediate first ping
     const id = setInterval(tick, intervalMs);
-    opts.log(`[keepalive] started: ${urls.length} url(s), every ${intervalMs}ms`);
+    opts.log(`[keepalive] started: ${urls.length} url(s), every ${intervalMs}ms (using fetch + credentials)`);
     return {
-      stop: () => { clearInterval(id); opts.log(`[keepalive] stopped after ${pings} pings`); },
+      stop: () => {
+        clearInterval(id);
+        const summary = urls.map(u => `  ${u}: ok=${results[u].ok} fail=${results[u].fail} lastStatus=${results[u].lastStatus}`).join('\n');
+        opts.log(`[keepalive] stopped after ${pings} ticks:\n${summary}`);
+      },
       pings: () => pings,
+      results: () => results,
     };
   }
 
