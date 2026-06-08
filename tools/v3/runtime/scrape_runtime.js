@@ -334,6 +334,46 @@
     return results;
   }
 
+  // ── Keepalive ────────────────────────────────────────────────────────
+  // Long scrapes (e.g. ~100 visits at ~10s each) outrun the portal's idle
+  // session timeout. Every portal we care about exposes a keepalive endpoint
+  // that, when pinged, resets the inactivity timer. We hit it via Image GET
+  // so no CORS preflight; cookies ride along automatically.
+  //
+  // Some portals (Stanford especially) have INDEPENDENT session timers per
+  // origin (the wrapper at myhealth.* and the API host at mychart.* each
+  // expire on their own), so the config carries an ARRAY of full URLs to
+  // ping. We hit them all on each tick.
+  //
+  // Config:  auth.keepalive_urls: ["https://mychart.../keepalive.asp",
+  //                                "/signedin/keepalive.asp"]  // wrapper-relative ok
+  //          auth.keepalive_interval_ms: 60000  (default)
+  function startKeepalive(authCfg, opts) {
+    const urls = (authCfg.keepalive_urls || []).filter(Boolean);
+    if (urls.length === 0) {
+      opts.log('[keepalive] no keepalive_urls configured — skipping');
+      return null;
+    }
+    const intervalMs = authCfg.keepalive_interval_ms || 60000;
+    let pings = 0;
+    const tick = () => {
+      pings++;
+      const noCache = Math.random();
+      for (const u of urls) {
+        // Append cache-buster so the browser doesn't return a 304
+        const sep = u.includes('?') ? '&' : '?';
+        new Image().src = u + sep + 'cnt=' + pings + '&noCache=' + noCache;
+      }
+    };
+    tick();  // immediate first ping so we don't have to wait intervalMs
+    const id = setInterval(tick, intervalMs);
+    opts.log(`[keepalive] started: ${urls.length} url(s), every ${intervalMs}ms`);
+    return {
+      stop: () => { clearInterval(id); opts.log(`[keepalive] stopped after ${pings} pings`); },
+      pings: () => pings,
+    };
+  }
+
   // ── Public API ───────────────────────────────────────────────────────
   class ScrapeRuntime {
     constructor(portalCfg, options = {}) {
@@ -350,13 +390,18 @@
       this.options.log(`runtime ${RUNTIME_VERSION} starting on ${this.portalCfg.portal_id}`);
       this.options.log(`token=found  pageNonce=${pageNonce ? 'found' : 'not used'}`);
 
+      const keepalive = startKeepalive(this.portalCfg.auth, this.options);
       const results = {};
-      for (const job of jobList) {
-        this.options.log(`---- job: ${job} ----`);
-        results[job] = await runJob(job, this.portalCfg, token, pageNonce, results, this.options);
-        this.options.log(`[${job}] complete: ${results[job].length} items returned`);
+      try {
+        for (const job of jobList) {
+          this.options.log(`---- job: ${job} ----`);
+          results[job] = await runJob(job, this.portalCfg, token, pageNonce, results, this.options);
+          this.options.log(`[${job}] complete: ${results[job].length} items returned`);
+        }
+        return results;
+      } finally {
+        if (keepalive) keepalive.stop();
       }
-      return results;
     }
   }
 

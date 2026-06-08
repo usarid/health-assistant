@@ -10,7 +10,12 @@
   "auth": {
     "token_selector": "input[name=\"__RequestVerificationToken\"]",
     "token_header": "__requestverificationtoken",
-    "page_nonce_regex": null
+    "page_nonce_regex": null,
+    "_keepalive_comment": "Long scrapes outrun the default idle-session timeout. UCSF appears single-origin (no separate wrapper), so one URL is enough. Same Image-GET tactic as Stanford.",
+    "keepalive_urls": [
+      "/UCSFMyChart/Authentication/Login?mode=keepalive"
+    ],
+    "keepalive_interval_ms": 60000
   },
 
   "jobs": {

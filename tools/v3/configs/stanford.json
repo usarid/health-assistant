@@ -10,7 +10,13 @@
   "auth": {
     "token_selector": "input[name=\"__RequestVerificationToken\"]",
     "token_header": "__requestverificationtoken",
-    "page_nonce_regex": null
+    "page_nonce_regex": null,
+    "_keepalive_comment": "Stanford has independent session timers per origin: the wrapper at myhealth.* and the API host at mychart.* each idle-time-out on their own. Long scrapes (~100 visits at ~10s each = ~17 min) outrun the default ~10-15 min timeout, so we ping both. Image-GET tactic = no CORS preflight; browser carries cookies.",
+    "keepalive_urls": [
+      "https://mychart.stanfordhealthcare.org/myhealth_sso/keepalive.asp",
+      "https://myhealth.stanfordhealthcare.org/signedin/keepalive.asp"
+    ],
+    "keepalive_interval_ms": 60000
   },
 
   "jobs": {

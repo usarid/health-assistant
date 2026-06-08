@@ -12,7 +12,11 @@ Each portal gets one JSON config file. Top-level shape:
   "auth": {
     "token_selector": "input[name=\"__RequestVerificationToken\"]",
     "token_header": "__requestverificationtoken",
-    "page_nonce_regex": null              // optional; only set if portal requires PageNonce
+    "page_nonce_regex": null,             // optional; only set if portal requires PageNonce
+    "keepalive_urls": [                   // optional; one or more URLs pinged by Image GET to keep session alive during long scrapes
+      "https://mychart.example.org/portal/keepalive.asp"
+    ],
+    "keepalive_interval_ms": 60000        // optional; default 60000
   },
 
   "jobs": {
