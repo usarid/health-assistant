@@ -1,0 +1,33 @@
+name: bina_mobile
+description: BinaHealth mobile app — Flutter prototype for portal scraping
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # The whole architecture rests on this — gives us addUserScript / onLoadStop /
+  # evaluateJavascript / addJavaScriptHandler with full WKWebView API parity on
+  # iOS+macOS and proper Android WebView control. Better than the default
+  # webview_flutter for our use case.
+  flutter_inappwebview: ^6.0.0
+
+  # Documents directory for writing captured note JSONs.
+  path_provider: ^2.1.4
+
+  # Reserved for iteration 3 (POSTing scrapes to the BinaHealth backend).
+  http: ^1.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

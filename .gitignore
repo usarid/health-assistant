@@ -55,3 +55,12 @@ tools/v2/patient_config/patient_identity.json
 # ── v3 scraper ──
 # Live scraped output (contains full clinical note HTML; never commit)
 tools/v3/out/
+
+# ── mobile/ (Flutter project — keep source, ignore build/Pods/etc) ──
+mobile/.dart_tool/
+mobile/build/
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/ios/Flutter/Flutter.framework
+mobile/ios/Flutter/Flutter.podspec
+mobile/macos/Pods/
