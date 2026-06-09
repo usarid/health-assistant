@@ -29,6 +29,15 @@ sudo xcodebuild -license accept || true
 echo "  running first-launch installer (idempotent)"
 sudo xcodebuild -runFirstLaunch || true
 
+# Xcode ships with the simulator framework but the iOS platform/runtime is
+# a separate ~5 GB download that -runFirstLaunch doesn't include. Without it
+# `xcrun simctl list devices available` shows no iPhones and `flutter run`
+# has no iOS target.
+if ! xcrun simctl list devices available 2>/dev/null | grep -q iPhone; then
+  echo "  no iOS simulator runtime detected — downloading (this is ~5 GB, 5-10 min)"
+  xcodebuild -downloadPlatform iOS
+fi
+
 echo ""
 echo "=== 3/6: flutter doctor (no Android, iOS only for this prototype) ==="
 flutter config --no-enable-android > /dev/null
