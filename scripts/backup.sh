@@ -52,8 +52,12 @@ docker exec -i phv-postgres-v2 pg_dumpall -U hapi > "$STAGE/hapi-v2.sql"
 
 # SQLite logical dump. .dump produces a portable SQL text; survives schema
 # migrations across SQLite versions; trivially restored via sqlite3 .read.
+# The phv-api container doesn't ship sqlite3, so we copy the .db file out
+# and dump it with the host's sqlite3 (macOS ships /usr/bin/sqlite3).
 echo "$LOG_PREFIX dumping app SQLite (chat.db)"
-docker exec -i phv-api sqlite3 /data/chat.db .dump > "$STAGE/chat.sql"
+docker cp phv-api:/data/chat.db "$STAGE/chat.db"
+sqlite3 "$STAGE/chat.db" .dump > "$STAGE/chat.sql"
+rm "$STAGE/chat.db"
 
 echo "$LOG_PREFIX dump sizes:"
 du -sh "$STAGE"/*.sql | sed 's/^/  /'
