@@ -1,0 +1,46 @@
+# BinaHealth backup credentials — restic + Backblaze B2.
+#
+# Copy this file to ~/.binahealth-backup-env, fill in the four values from the
+# Backblaze B2 web console + a password you generate yourself, then:
+#
+#     chmod 600 ~/.binahealth-backup-env
+#
+# It MUST NOT be readable by other users. It MUST NOT be committed to git
+# (anywhere). The restic password specifically is the encryption key for your
+# backups — if you lose it, the backups are unrecoverable.
+#
+# Recommended: also store the four values in your password manager so they
+# survive if this machine is lost.
+#
+# ── How to get the values ──────────────────────────────────────────────
+#
+# 1. Sign up at https://www.backblaze.com/cloud-storage  (free tier: 10 GB)
+# 2. In the B2 web console (Account > My Settings is fine):
+#      Buckets → Create a Bucket → name e.g. "binahealth-restic"
+#      Encryption: B2 default is fine (restic encrypts client-side anyway)
+#      Object lock: leave disabled for personal use
+# 3. App Keys → Add a New Application Key:
+#      Name: "binahealth-restic"
+#      Allow access to: "binahealth-restic" (just this bucket)
+#      Type: Read and Write
+#      → You'll see keyID and applicationKey ONCE — copy them now.
+# 4. Generate a strong password for the restic repository itself (this is
+#    different from B2 credentials — it's what encrypts your backups):
+#      openssl rand -base64 32
+#    Save it in your password manager AND paste below.
+#
+# ── Values ─────────────────────────────────────────────────────────────
+
+# From B2: "Application Key ID"
+export B2_ACCOUNT_ID="REPLACE_WITH_B2_keyID"
+
+# From B2: "Application Key" (the longer secret, shown ONCE)
+export B2_ACCOUNT_KEY="REPLACE_WITH_B2_applicationKey"
+
+# Repository URL — the bucket name comes after "b2:". Pattern: b2:<bucket>:<path>
+# The :restic suffix puts everything in a subdirectory inside the bucket.
+export RESTIC_REPOSITORY="b2:binahealth-restic:restic"
+
+# YOUR client-side encryption password (the one openssl rand generated).
+# B2 cannot read your backups without this — neither can anyone else.
+export RESTIC_PASSWORD="REPLACE_WITH_OPENSSL_RAND_OUTPUT"

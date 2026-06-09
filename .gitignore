@@ -64,3 +64,6 @@ mobile/ios/.symlinks/
 mobile/ios/Flutter/Flutter.framework
 mobile/ios/Flutter/Flutter.podspec
 mobile/macos/Pods/
+
+# ── Backup credentials (never commit) ──
+.binahealth-backup-env
