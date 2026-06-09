@@ -31,3 +31,10 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # The CSN list lives in assets/ as a bundled asset. The file itself is
+  # gitignored (it contains PHI — visit identifiers + provider names) and
+  # is copied from tools/v3/out/ by scripts/sync-mobile-assets.sh before
+  # `flutter run`. Iteration 3 will replace this with portal-driven
+  # discovery so production app never bundles patient data.
+  assets:
+    - assets/

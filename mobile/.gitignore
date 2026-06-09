@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Bundled PHI (CSN list from tools/v3/out/) — copied at build time, never committed.
+# See scripts/sync-mobile-assets.sh.
+assets/

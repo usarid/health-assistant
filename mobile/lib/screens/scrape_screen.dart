@@ -1,22 +1,27 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../scrape/scrape_jobs.dart';
+import '../scrape/stanford_config.dart';
 import '../storage/local_writer.dart';
 
-/// Day-one scrape screen: a single WebView whose lifecycle the host owns.
+/// Iteration 2 scrape screen.
 ///
-/// Flow:
-///   - WebView opens Stanford MyHealth login.
-///   - User logs in (handles MFA in the WebView, full credential control).
-///   - When the URL lands on /signedin/..., we enable the "Scrape this visit"
-///     action in the AppBar.
-///   - Tap → host drives loadUrl(after-visit-summary URL for hardcoded test CSN).
-///     This top-level navigation is what gets Sec-Fetch-Dest: document, the one
-///     thing page-JS scraping CAN'T fake (proven 2026-06-08).
-///   - onLoadStop → host injects scraper JS via evaluateJavascript.
-///   - JS clicks the Clinical Notes tab, polls .pgSection, captures outerHTML,
-///     calls back via window.flutter_inappwebview.callHandler('saveNote', ...).
-///   - Dart handler writes JSON to the app's documents directory.
+/// Beyond iteration 1's single-visit demo, this:
+///   - Loads the Stanford CSN list from assets/stanford-v3-visits.json
+///     (filtered to visits with shareable notes — typically ~106 entries).
+///   - Loops over each CSN: host-driven controller.loadUrl → await
+///     onLoadStop → inject scraper → await saveNote callback → persist.
+///   - Runs keepalive belt-and-suspenders:
+///       (a) per-visit scrape JS fires keepalive fetches at scrape start
+///           (~10s cadence)
+///       (b) Dart Timer.periodic injects a keepalive JS every 30s as a
+///           safety net if a per-visit scrape stalls
+///   - Persists each note to its own JSON immediately (crash-safe), updates
+///     a manifest, and writes a consolidated JSON at the end.
+///   - Surfaces live progress: X/N captured, Y real, Z errors • K pings.
 class ScrapeScreen extends StatefulWidget {
   const ScrapeScreen({super.key});
 
@@ -26,16 +31,37 @@ class ScrapeScreen extends StatefulWidget {
 
 class _ScrapeScreenState extends State<ScrapeScreen> {
   InAppWebViewController? _ctrl;
-  String _status = 'Tap the address bar to log into Stanford MyHealth';
+
+  String _status = 'Log into Stanford MyHealth';
   String _currentUrl = '';
   bool _onSignedInPage = false;
+  bool _batchRunning = false;
+  bool _abortRequested = false;
 
-  // Day-one hardcoded test CSN — the 3/27/2026 Telemedicine visit with
-  // Susan Ziolkowski, MD. We know it has a real Clinical Notes tab with
-  // content (validated via Chrome MCP 2026-06-08). Replace with a dynamically
-  // discovered CSN in iteration 2.
+  // Single-visit test CSN (kept from iteration 1 so we can spot-check)
   static const String _testCsn =
       'WP-242cylB3JEw7-2F-2FQUxFt6Xmsg-3D-3D-24uWtvS9-2FNhwMvYRaT4g0QO20SzIPlEtu5R6S4k0Qya-2Fc-3D';
+
+  // Completers that bridge JS lifecycle events into Dart's async/await
+  Completer<void>? _navCompleter;
+  Completer<Map<String, dynamic>>? _scrapeCompleter;
+
+  // Batch state
+  int _batchTotal = 0;
+  int _batchIndex = 0;
+  final List<CapturedNote> _captured = [];
+  final List<ScrapeError> _errors = [];
+  DateTime? _batchStartedAt;
+
+  // Keepalive (Dart-side safety net)
+  Timer? _keepaliveTimer;
+  int _keepalivePings = 0;
+
+  @override
+  void dispose() {
+    _keepaliveTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,20 +71,13 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
       ),
-      floatingActionButton: _onSignedInPage
-          ? FloatingActionButton.extended(
-              onPressed: _scrapeOneVisit,
-              icon: const Icon(Icons.cloud_download),
-              label: const Text('Scrape this visit'),
-              backgroundColor: Colors.teal,
-              foregroundColor: Colors.white,
-            )
-          : null,
+      floatingActionButton: _buildFab(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: Column(
         children: [
           Container(
             padding: const EdgeInsets.all(12),
-            color: Colors.amber.shade100,
+            color: _batchRunning ? Colors.blue.shade50 : Colors.amber.shade100,
             width: double.infinity,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -67,32 +86,32 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                   _status,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
-                if (_currentUrl.isNotEmpty)
+                if (_batchRunning)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '$_batchIndex/$_batchTotal • captured ${_captured.length} '
+                      '(${_captured.where((c) => c.visibleTextLength > 100).length} real) '
+                      '• errors ${_errors.length} • keepalive $_keepalivePings',
+                      style: const TextStyle(fontSize: 11, color: Colors.black87, fontFamily: 'monospace'),
+                    ),
+                  ),
+                if (_currentUrl.isNotEmpty && !_batchRunning)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      _currentUrl,
-                      style: const TextStyle(fontSize: 11, color: Colors.black54),
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    child: Text(_currentUrl,
+                        style: const TextStyle(fontSize: 11, color: Colors.black54),
+                        overflow: TextOverflow.ellipsis),
                   ),
               ],
             ),
           ),
           Expanded(
             child: InAppWebView(
-              initialUrlRequest: URLRequest(
-                url: WebUri('https://myhealth.stanfordhealthcare.org/#/'),
-              ),
+              initialUrlRequest: URLRequest(url: WebUri(StanfordConfig.loginUrl)),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
-                // Mimic mobile Safari UA — Stanford may serve a different UI to
-                // a default macOS WKWebView UA, and we want our prototype to see
-                // what the real iPhone app will see.
-                userAgent:
-                    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
-                    'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
-                    'Mobile/15E148 Safari/604.1',
+                userAgent: StanfordConfig.mobileUserAgent,
               ),
               onWebViewCreated: (c) {
                 _ctrl = c;
@@ -103,14 +122,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
-                final onSignedIn = urlStr.contains('/signedin/');
+                final onSignedIn = urlStr.contains(StanfordConfig.signedInMarker);
                 setState(() {
                   _currentUrl = urlStr;
                   _onSignedInPage = onSignedIn;
-                  if (onSignedIn && !_status.contains('Scraped')) {
-                    _status = 'Logged in. Tap "Scrape this visit" to test.';
+                  if (onSignedIn && !_batchRunning && !_status.startsWith('Scrape')) {
+                    _status = 'Logged in. Choose Test or Scrape All.';
                   }
                 });
+                // Resolve a pending navigation if this is the URL we asked for
+                if (_navCompleter != null && _navCompleter!.isCompleted == false) {
+                  _navCompleter!.complete();
+                }
               },
             ),
           ),
@@ -119,52 +142,226 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     );
   }
 
-  Future<dynamic> _onSaveNoteHandler(List<dynamic> args) async {
-    if (args.isEmpty || args.first is! Map) {
-      setState(() => _status = 'Handler called with bad args');
-      return {'ok': false, 'reason': 'bad-args'};
+  Widget? _buildFab() {
+    if (_batchRunning) {
+      return FloatingActionButton.extended(
+        onPressed: () { setState(() { _abortRequested = true; _status = 'Abort requested — finishing current visit…'; }); },
+        icon: const Icon(Icons.stop),
+        label: const Text('Abort batch'),
+        backgroundColor: Colors.red.shade600,
+        foregroundColor: Colors.white,
+      );
     }
-    final m = Map<String, dynamic>.from(args.first as Map);
-    final csn = (m['csn'] ?? 'unknown').toString();
-    final html = (m['html'] ?? '').toString();
-    final error = m['error']?.toString();
-
-    if (error != null && error.isNotEmpty) {
-      setState(() => _status = 'Scrape failed: $error (csn ${csn.substring(0, 8)}…)');
-      return {'ok': false, 'reason': error};
-    }
-    if (html.isEmpty) {
-      setState(() => _status = 'Empty HTML returned for ${csn.substring(0, 8)}…');
-      return {'ok': false, 'reason': 'empty'};
-    }
-
-    final path = await LocalWriter.writeNote(csn, html);
-    setState(() {
-      _status = 'Scraped ${html.length} chars → $path';
-    });
-    return {'ok': true, 'path': path};
+    if (!_onSignedInPage) return null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        FloatingActionButton.extended(
+          heroTag: 'test',
+          onPressed: () => _scrapeOne(_testCsn),
+          icon: const Icon(Icons.science),
+          label: const Text('Test one'),
+          backgroundColor: Colors.grey.shade700,
+          foregroundColor: Colors.white,
+        ),
+        const SizedBox(height: 12),
+        FloatingActionButton.extended(
+          heroTag: 'batch',
+          onPressed: _scrapeAll,
+          icon: const Icon(Icons.cloud_download),
+          label: const Text('Scrape all'),
+          backgroundColor: Colors.teal,
+          foregroundColor: Colors.white,
+        ),
+      ],
+    );
   }
 
-  Future<void> _scrapeOneVisit() async {
-    final ctrl = _ctrl;
-    if (ctrl == null) return;
+  // ── Handler the WebView calls back into ────────────────────────────
+  Future<dynamic> _onSaveNoteHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false, 'reason': 'bad-args'};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_scrapeCompleter != null && !_scrapeCompleter!.isCompleted) {
+      _scrapeCompleter!.complete(m);
+    }
+    return {'ok': true};
+  }
 
-    setState(() => _status = 'Navigating to test visit (top-level)…');
+  // ── Single test scrape (preserves iteration-1 flow) ────────────────
+  Future<void> _scrapeOne(String csn) async {
+    if (_ctrl == null) return;
+    setState(() => _status = 'Test scrape: navigating…');
+    final res = await _scrapeOneVisit(csn);
+    if (res == null) {
+      setState(() => _status = 'Test scrape: navigation failed');
+      return;
+    }
+    final html = (res['html'] ?? '').toString();
+    final err = res['error']?.toString();
+    if (err != null && err.isNotEmpty) {
+      setState(() => _status = 'Test scrape failed: $err');
+      return;
+    }
+    final path = await LocalWriter.writeNote(csn, html);
+    setState(() => _status = 'Test scrape: ${html.length} chars → $path');
+  }
 
-    final url = 'https://myhealth.stanfordhealthcare.org/signedin/appointments/'
-        'after-visit-summary/csn=$_testCsn&encType=3';
+  // ── The actual loop ────────────────────────────────────────────────
+  Future<void> _scrapeAll() async {
+    if (_batchRunning) return;
+    final csns = await _loadCsnList();
+    if (csns.isEmpty) {
+      setState(() => _status = 'Could not load CSN list from assets/stanford-v3-visits.json');
+      return;
+    }
 
-    // The critical line. controller.loadUrl IS the host-driven top-level
-    // navigation that produces Sec-Fetch-Dest: document — the thing JS in
-    // a page cannot produce, and the one the portal requires.
-    await ctrl.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchTotal = csns.length;
+      _batchIndex = 0;
+      _captured.clear();
+      _errors.clear();
+      _batchStartedAt = DateTime.now();
+      _keepalivePings = 0;
+      _status = 'Scraping ${csns.length} visits — keepalive every 30s';
+    });
 
-    // Give the page a moment past onLoadStop. Stanford renders the AVS tab
-    // first; we'll click Clinical Notes in the injected JS.
-    await Future.delayed(const Duration(seconds: 3));
+    _startKeepalive();
 
-    setState(() => _status = 'Injecting scraper…');
+    try {
+      for (int i = 0; i < csns.length; i++) {
+        if (_abortRequested) {
+          setState(() => _status = 'Aborted at $i/${csns.length}');
+          break;
+        }
+        final csn = csns[i];
+        setState(() => _batchIndex = i + 1);
+        await LocalWriter.writeBatchManifest(BatchManifest(
+          startedAt: _batchStartedAt!,
+          totalCount: csns.length,
+          currentIndex: i,
+          capturedCount: _captured.length,
+          errorCount: _errors.length,
+          currentCsn: csn,
+        ));
 
-    await ctrl.evaluateJavascript(source: ScrapeJobs.stanfordSingleNote);
+        final res = await _scrapeOneVisit(csn);
+        if (res == null) {
+          _errors.add(ScrapeError(csn: csn, index: i, reason: 'nav-failed', at: DateTime.now()));
+          continue;
+        }
+        final html = (res['html'] ?? '').toString();
+        final err = res['error']?.toString();
+        if (err != null && err.isNotEmpty) {
+          _errors.add(ScrapeError(csn: csn, index: i, reason: err, at: DateTime.now()));
+          continue;
+        }
+        final plain = html.replaceAll(RegExp(r'<[^>]+>'), '').trim();
+        _captured.add(CapturedNote(
+          csn: csn,
+          html: html,
+          htmlLength: html.length,
+          visibleTextLength: plain.length,
+          capturedAt: DateTime.now(),
+        ));
+        await LocalWriter.writeNote(csn, html);
+      }
+
+      final finishedAt = DateTime.now();
+      final path = await LocalWriter.writeConsolidated(
+        captured: _captured,
+        errors: _errors,
+        startedAt: _batchStartedAt!,
+        finishedAt: finishedAt,
+      );
+      final dur = finishedAt.difference(_batchStartedAt!);
+      setState(() => _status =
+          'DONE in ${dur.inSeconds}s — ${_captured.length} captured '
+          '(${_captured.where((c) => c.visibleTextLength > 100).length} real), '
+          '${_errors.length} errors → $path');
+    } finally {
+      _stopKeepalive();
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// One iteration of the loop. Returns null if navigation never settled;
+  /// otherwise the saveNote handler's payload (containing 'html' or 'error').
+  Future<Map<String, dynamic>?> _scrapeOneVisit(String csn) async {
+    final url = StanfordConfig.visitDetailUrlPattern
+        .replaceAll('%CSN%', Uri.encodeComponent(csn));
+
+    _navCompleter = Completer<void>();
+    try {
+      await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    } catch (e) {
+      return null;
+    }
+    try {
+      await _navCompleter!.future.timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      return {'error': 'nav-timeout'};
+    }
+    // settle delay — page's own JS bootstraps after onLoadStop
+    await Future.delayed(const Duration(seconds: 2));
+
+    _scrapeCompleter = Completer<Map<String, dynamic>>();
+    try {
+      await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordSingleNote());
+    } catch (e) {
+      return {'error': 'inject-failed: $e'};
+    }
+    try {
+      return await _scrapeCompleter!.future.timeout(const Duration(seconds: 25));
+    } on TimeoutException {
+      return {'error': 'scrape-timeout'};
+    }
+  }
+
+  // ── Keepalive (Dart-side safety net) ───────────────────────────────
+  void _startKeepalive() {
+    _keepaliveTimer?.cancel();
+    _keepalivePings = 0;
+    _keepaliveTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (_ctrl == null) return;
+      try {
+        await _ctrl!.evaluateJavascript(source: ScrapeJobs.keepalive());
+        setState(() => _keepalivePings++);
+      } catch (_) {
+        // WebView may be mid-navigation — fine, the per-visit JS will catch the next ping
+      }
+    });
+  }
+
+  void _stopKeepalive() {
+    _keepaliveTimer?.cancel();
+    _keepaliveTimer = null;
+  }
+
+  // ── CSN list source (iteration 3 will replace with portal-driven discovery) ──
+  Future<List<String>> _loadCsnList() async {
+    try {
+      final raw = await rootBundle.loadString('assets/stanford-v3-visits.json');
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final visits = (data['visits'] as List?) ?? const [];
+      final csns = <String>[];
+      for (final v in visits) {
+        if (v is! Map) continue;
+        final item = v['item'] as Map?;
+        final resp = v['response'] as Map?;
+        // Only visits with shareable notes
+        final notesInfo = resp?['notesInfo'] as Map?;
+        final shareable = notesInfo?['isAtLeastOneNoteShareable'] == true;
+        final reportId = (notesInfo?['notesReport'] as Map?)?['reportID'];
+        if (!shareable || reportId == null) continue;
+        final csn = (item?['Csn'] ?? resp?['csn'])?.toString();
+        if (csn != null && csn.isNotEmpty) csns.add(csn);
+      }
+      return csns;
+    } catch (_) {
+      return const [];
+    }
   }
 }

@@ -67,3 +67,6 @@ mobile/macos/Pods/
 
 # ── Backup credentials (never commit) ──
 .binahealth-backup-env
+
+# Mobile-bundled PHI asset (CSN list) — see scripts/sync-mobile-assets.sh
+mobile/assets/
