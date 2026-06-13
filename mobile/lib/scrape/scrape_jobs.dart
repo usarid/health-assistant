@@ -123,9 +123,15 @@ true;
     return document.querySelector('input[type="password"]');
   }
   function findSignInButton() {
-    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-    return buttons.find(b => /sign\\s*in/i.test(b.textContent || b.value || ''))
-        || document.querySelector('form button[type="submit"]')
+    // Stanford's "SIGN IN" affordance isn't a <button> — empirically the
+    // CSS selector for <button> + input[type=submit] missed it. Widen to
+    // anchors and role=button elements, plus any clickable text match.
+    const candidates = Array.from(document.querySelectorAll(
+      'button, input[type="submit"], a, [role="button"], [tabindex]'));
+    const byText = candidates.find(el =>
+      /sign\\s*in/i.test(el.textContent || el.value || ''));
+    if (byText) return byText;
+    return document.querySelector('form button[type="submit"]')
         || document.querySelector('form input[type="submit"]');
   }
   function setValue(el, val) {
