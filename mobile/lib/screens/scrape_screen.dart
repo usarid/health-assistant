@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show Random;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -230,6 +231,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
     _startKeepalive();
 
+    final rng = Random();
     try {
       for (int i = 0; i < csns.length; i++) {
         if (_abortRequested) {
@@ -250,23 +252,37 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         final res = await _scrapeOneVisit(csn);
         if (res == null) {
           _errors.add(ScrapeError(csn: csn, index: i, reason: 'nav-failed', at: DateTime.now()));
-          continue;
+        } else if (res['sessionDead'] == true) {
+          // Session revoked — every subsequent visit will fail with the same
+          // error. Stop the batch cleanly rather than burn through 100 more
+          // doomed iterations.
+          _errors.add(ScrapeError(csn: csn, index: i, reason: res['error']?.toString() ?? 'session-dead', at: DateTime.now()));
+          setState(() => _status = 'Stopped at $i/${csns.length} — session revoked. Log in again and retry.');
+          break;
+        } else {
+          final html = (res['html'] ?? '').toString();
+          final err = res['error']?.toString();
+          if (err != null && err.isNotEmpty) {
+            _errors.add(ScrapeError(csn: csn, index: i, reason: err, at: DateTime.now()));
+          } else {
+            final plain = html.replaceAll(RegExp(r'<[^>]+>'), '').trim();
+            _captured.add(CapturedNote(
+              csn: csn,
+              html: html,
+              htmlLength: html.length,
+              visibleTextLength: plain.length,
+              capturedAt: DateTime.now(),
+            ));
+            await LocalWriter.writeNote(csn, html);
+          }
         }
-        final html = (res['html'] ?? '').toString();
-        final err = res['error']?.toString();
-        if (err != null && err.isNotEmpty) {
-          _errors.add(ScrapeError(csn: csn, index: i, reason: err, at: DateTime.now()));
-          continue;
+
+        // Between-visit pacing. Stanford rate-limits rapid-fire navigation;
+        // 3-7s jittered keeps the cadence below their threshold.
+        if (i + 1 < csns.length && !_abortRequested) {
+          final pauseMs = 3000 + rng.nextInt(4000);
+          await Future.delayed(Duration(milliseconds: pauseMs));
         }
-        final plain = html.replaceAll(RegExp(r'<[^>]+>'), '').trim();
-        _captured.add(CapturedNote(
-          csn: csn,
-          html: html,
-          htmlLength: html.length,
-          visibleTextLength: plain.length,
-          capturedAt: DateTime.now(),
-        ));
-        await LocalWriter.writeNote(csn, html);
       }
 
       final finishedAt = DateTime.now();
@@ -289,6 +305,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
   /// One iteration of the loop. Returns null if navigation never settled;
   /// otherwise the saveNote handler's payload (containing 'html' or 'error').
+  ///
+  /// Pacing notes (2026-06-13 finding): Stanford rate-limits rapid-fire
+  /// navigation. ~2s/visit triggered session revocation after ~20s. We
+  /// pace conservatively: 4s settle + 3-7s jittered between visits.
+  /// Estimated run time at this cadence: ~15s/visit × 106 = ~26 min.
   Future<Map<String, dynamic>?> _scrapeOneVisit(String csn) async {
     final url = StanfordConfig.visitDetailUrlPattern
         .replaceAll('%CSN%', Uri.encodeComponent(csn));
@@ -304,8 +325,20 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } on TimeoutException {
       return {'error': 'nav-timeout'};
     }
-    // settle delay — page's own JS bootstraps after onLoadStop
-    await Future.delayed(const Duration(seconds: 2));
+
+    // Settle delay — Stanford's JS framework needs time to render the Past
+    // Visit Details page with its tabs after the HTML loads. 4s is the
+    // tested-safe minimum from the Chrome MCP runs.
+    await Future.delayed(const Duration(seconds: 4));
+
+    // Detect session death BEFORE wasting an inject attempt. If we got
+    // redirected to login or the home page, our URL no longer contains
+    // 'after-visit-summary'. The whole batch should bail in this case.
+    final landedUri = await _ctrl!.getUrl();
+    final landedStr = landedUri?.toString() ?? '';
+    if (!landedStr.contains('after-visit-summary')) {
+      return {'error': 'session-dead-landed-at:${_truncForLog(landedStr)}', 'sessionDead': true};
+    }
 
     _scrapeCompleter = Completer<Map<String, dynamic>>();
     try {
@@ -318,6 +351,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } on TimeoutException {
       return {'error': 'scrape-timeout'};
     }
+  }
+
+  static String _truncForLog(String s) {
+    // Keep the path but drop everything after csn= (which is identifying).
+    final i = s.indexOf('csn=');
+    return i >= 0 ? '${s.substring(0, i)}csn=…' : (s.length > 80 ? '${s.substring(0, 80)}…' : s);
   }
 
   // ── Keepalive (Dart-side safety net) ───────────────────────────────
