@@ -291,11 +291,33 @@ def convert_note(note, portal, src_file, scraper_ver):
     note_label = (note.get('_provenance') or {}).get('noteLabel') or ''
     note_title = ''
     note_author = ''
+    note_signed_iso = ''
     if note_label:
         note_title = re.split(r'\s*signed\s+by\s+', note_label, maxsplit=1, flags=re.I)[0].strip()
         author_match = re.search(r'signed\s+by\s+(.+?)\s+on\s+', note_label, flags=re.I)
         if author_match:
             note_author = author_match.group(1).strip()
+        # "...on M/D/YYYY at H:MM AM/PM..." → ISO timestamp. Treated as UTC
+        # (we don't know the patient's timezone) — fine for relative ordering
+        # of same-day notes, displayed time may shift by ~7-8h vs portal.
+        time_match = re.search(
+            r'on\s+(\d{1,2})/(\d{1,2})/(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*(AM|PM)',
+            note_label, flags=re.I)
+        if time_match:
+            mo, dy, yr, hr, mn, ampm = time_match.groups()
+            h = int(hr)
+            if ampm.upper() == 'PM' and h != 12: h += 12
+            if ampm.upper() == 'AM' and h == 12: h = 0
+            note_signed_iso = (
+                f'{int(yr):04d}-{int(mo):02d}-{int(dy):02d}'
+                f'T{h:02d}:{int(mn):02d}:00Z'
+            )
+
+    # Per-note signed-at trumps the visit date when present — gives multi-
+    # note hospital stays a real chronological ordering (admission first,
+    # discharge last) instead of every note inheriting one shared timestamp.
+    if note_signed_iso:
+        date_iso = note_signed_iso
 
     type_text = 'Clinical Note'
     if note_title:

@@ -6378,6 +6378,18 @@ function renderApptItem(fields) {
   // Check if this encounter has notes with available content
   const allDocs = getDocsForEncounter(id, identifiers, start);
   const viewableDocs = allDocs.filter(d => d.contentAvailable);
+  // Sort ascending by signed-at date so multi-note hospital stays read
+  // chronologically (admission → progress → discharge). DocRefs without
+  // a date sink to the end. HAPI returns DocRefs in id-hash order
+  // otherwise, which scrambles the clinical narrative.
+  viewableDocs.sort((a, b) => {
+    const da = a.date || '';
+    const db = b.date || '';
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da.localeCompare(db);
+  });
   const hasNotes = viewableDocs.length > 0;
 
   if (hasNotes) {
