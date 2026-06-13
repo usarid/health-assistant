@@ -164,6 +164,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                   handlerName: 'loginDiag',
                   callback: _onLoginDiagHandler,
                 );
+                c.addJavaScriptHandler(
+                  handlerName: 'noteDiag',
+                  callback: _onNoteDiagHandler,
+                );
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
@@ -278,6 +282,40 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     debugPrint('[bina diag] $line');
     if (!_showDiagnostics) return;
     if (mounted) setState(() => _diagLine = line);
+  }
+
+  /// Diagnostic stream from the multi-note scrape loop. Each call corresponds
+  /// to one stage (mode-detected, list-entered, pre-click, post-click,
+  /// post-back, list-done, iter-aborted). Always console-logged; surfaced
+  /// to the UI's diag strip only when [_showDiagnostics] is on.
+  Future<dynamic> _onNoteDiagHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    final stage = m['stage']?.toString() ?? '?';
+    debugPrint('[bina noteDiag] $stage $m');
+    if (!_showDiagnostics) return {'ok': true};
+    // Compact one-liner — order key fields by stage so the most relevant
+    // bits show up first.
+    String summary;
+    if (stage == 'pre-click' || stage == 'post-click') {
+      summary = '$stage i=${m["i"]} url=${m["urlPath"] ?? ""} '
+          'sec=${m["sectionLen"]}${stage == "post-click" ? " changed=${m["sectionChanged"]} cap=${m["capturedLen"]}" : ""}';
+    } else if (stage == 'post-back') {
+      summary = 'post-back i=${m["i"]} via=${m["method"]} '
+          'url=${m["urlPath"] ?? ""} btns=${m["buttonsNow"]}';
+    } else if (stage == 'list-entered') {
+      summary = 'list-entered (${m["buttonCount"]} buttons)';
+    } else if (stage == 'mode-detected') {
+      summary = 'mode=${m["mode"]} after ${m["elapsedMs"]}ms';
+    } else if (stage == 'iter-start') {
+      summary = 'iter-start i=${m["i"]} btns=${m["btnsAvailable"]}';
+    } else if (stage == 'list-done') {
+      summary = 'list-done captured=${m["capturedCount"]} empty=${m["emptyCount"]}';
+    } else {
+      summary = '$stage: $m';
+    }
+    if (mounted) setState(() => _diagLine = summary);
+    return {'ok': true};
   }
 
   Future<void> _onMenuSelected(String value) async {

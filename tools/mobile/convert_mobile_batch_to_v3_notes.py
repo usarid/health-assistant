@@ -72,20 +72,35 @@ def make_v3_entry(visit, html, captured_at, sub_index=None, label=None,
 
 
 def main():
-    if len(sys.argv) != 2:
-        print('usage: convert_mobile_batch_to_v3_notes.py <stanford-batch-*.json>', file=sys.stderr)
+    if len(sys.argv) < 2:
+        print('usage: convert_mobile_batch_to_v3_notes.py <stanford-batch-*.json> [<more-batches>...]',
+              file=sys.stderr)
+        print('  Multiple batches merge by CSN — later batches override earlier ones for the same CSN.',
+              file=sys.stderr)
         sys.exit(1)
 
-    batch_path = Path(sys.argv[1])
-    if not batch_path.exists():
-        print(f'ERROR: {batch_path} not found', file=sys.stderr)
-        sys.exit(1)
+    batch_paths = [Path(p) for p in sys.argv[1:]]
+    for bp in batch_paths:
+        if not bp.exists():
+            print(f'ERROR: {bp} not found', file=sys.stderr)
+            sys.exit(1)
 
-    print(f'Loading mobile batch:  {batch_path}')
-    with open(batch_path) as f:
-        batch = json.load(f)
-    captured = batch.get('captured', [])
-    print(f'  mobile captured CSNs:  {len(captured)}')
+    # Merge captured arrays across all batches, keyed by CSN — later batches
+    # win on conflict. Lets you replay a base "Scrape all" run plus a later
+    # targeted "Retry failed visits" without losing the bulk of the data.
+    merged_by_csn = {}
+    for bp in batch_paths:
+        print(f'Loading mobile batch:  {bp}')
+        with open(bp) as f:
+            b = json.load(f)
+        cap = b.get('captured', [])
+        print(f'  captured CSNs:  {len(cap)}')
+        for c in cap:
+            csn = c.get('csn')
+            if csn:
+                merged_by_csn[csn] = c
+    captured = list(merged_by_csn.values())
+    print(f'  merged total CSNs across {len(batch_paths)} batch(es):  {len(captured)}')
 
     if not VISITS_FILE.exists():
         print(f'ERROR: {VISITS_FILE} not found — needed for visit metadata lookup', file=sys.stderr)

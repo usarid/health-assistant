@@ -28,6 +28,21 @@ class ScrapeJobs {
     }
   }
 
+  // Diagnostic emit — only payload metadata (counts, lengths, URL paths).
+  // Never note text or labels. Surfaces in the in-app diag strip when the
+  // user toggles diagnostics on; otherwise lives in debugPrint only.
+  function diag(stage, fields) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      const payload = { stage };
+      if (fields) for (const k in fields) payload[k] = fields[k];
+      window.flutter_inappwebview.callHandler('noteDiag', payload);
+    }
+  }
+  function urlPathOnly(u) {
+    // Drop query/fragment (which contain csn=...) — keep just the path.
+    try { return new URL(u).pathname; } catch (_) { return ''; }
+  }
+
   const m = location.href.match(/csn=([^&]+)/);
   const csn = m ? decodeURIComponent(m[1]) : 'unknown';
 
@@ -76,6 +91,8 @@ class ScrapeJobs {
     if (section && section.textContent.length > 200) { mode = 'inline'; break; }
   }
 
+  diag('mode-detected', { mode: mode || 'timeout', elapsedMs: Date.now() - startedAt });
+
   if (mode === 'inline') {
     send({ csn, html: document.querySelector('.pgSection').outerHTML });
     return;
@@ -83,11 +100,16 @@ class ScrapeJobs {
 
   if (mode === 'list') {
     const initialButtonCount = findViewNoteButtons().length;
+    diag('list-entered', { buttonCount: initialButtonCount });
     const notes = [];
 
     for (let i = 0; i < initialButtonCount; i++) {
       const btns = await ensureListView();
-      if (i >= btns.length) break;
+      diag('iter-start', { i, btnsAvailable: btns.length });
+      if (i >= btns.length) {
+        diag('iter-aborted', { i, reason: 'no-button-at-index' });
+        break;
+      }
       const btn = btns[i];
 
       // Snapshot row label (note title + signer + date) for downstream
@@ -101,6 +123,12 @@ class ScrapeJobs {
 
       const beforeUrl = location.href;
       const beforeText = document.querySelector('.pgSection')?.textContent || '';
+      diag('pre-click', {
+        i,
+        urlPath: urlPathOnly(beforeUrl),
+        sectionLen: beforeText.length,
+        labelLen: label.length,
+      });
       btn.click();
 
       // Wait for the per-note body to render. Either URL changed (separate
@@ -108,30 +136,60 @@ class ScrapeJobs {
       // 1500 char threshold filters out re-renders that are just larger list
       // skeletons; real note bodies are 5–200 KB.
       let html = '';
+      let finalSectionLen = 0;
+      let sectionChanged = false;
       const t0 = Date.now();
       while (Date.now() - t0 < 15000) {
         await new Promise(r => setTimeout(r, 400));
         const section = document.querySelector('.pgSection');
         const text = section?.textContent || '';
+        finalSectionLen = text.length;
+        if (text !== beforeText) sectionChanged = true;
         if (section && text.length > 1500 && text !== beforeText) {
           html = section.outerHTML;
           break;
         }
       }
 
+      diag('post-click', {
+        i,
+        urlPath: urlPathOnly(location.href),
+        urlChanged: location.href !== beforeUrl,
+        sectionLen: finalSectionLen,
+        sectionChanged,
+        capturedLen: html.length,
+        pollMs: Date.now() - t0,
+      });
+
       notes.push({ label, html, htmlLength: html.length });
 
       // Navigate back to the list. Prefer history.back() when click changed
       // the URL; otherwise look for an in-page back affordance.
+      let backMethod = 'none';
       if (location.href !== beforeUrl) {
         history.back();
+        backMethod = 'history.back';
       } else {
         const back = Array.from(document.querySelectorAll('a, button'))
           .find(el => /back\\s+to|return/i.test(el.textContent || ''));
-        if (back) back.click();
+        if (back) {
+          back.click();
+          backMethod = 'back-link-click';
+        }
       }
       await new Promise(r => setTimeout(r, 800));
+      diag('post-back', {
+        i,
+        method: backMethod,
+        urlPath: urlPathOnly(location.href),
+        buttonsNow: findViewNoteButtons().length,
+      });
     }
+
+    diag('list-done', {
+      capturedCount: notes.filter(n => n.htmlLength > 0).length,
+      emptyCount: notes.filter(n => n.htmlLength === 0).length,
+    });
 
     if (notes.length === 0) {
       send({ csn, html: '', error: 'list-view-no-notes-captured' });
