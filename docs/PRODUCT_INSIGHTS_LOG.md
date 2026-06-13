@@ -17,6 +17,7 @@
 | ID | Status | Insight (short) | First captured |
 |---|---|---|---|
 | P-001 | raw-idea | "Log in once, see everything" as primary onboarding promise — lead with strong-aggregator portals before asking about specific institutions | 2026-05-29 |
+| P-002 | raw-idea | Productizing local credential storage (saved-login autofill) needs lawyer review against Apple App Store guideline 5.1.5 + each portal's ToS BEFORE multi-tenant ship | 2026-06-13 |
 
 ---
 
@@ -58,3 +59,31 @@
   - H-003 resolved.
   - Patient N=3 enrolled (aggregator rankings comparable across patients).
   - First user research session on real onboarding flows.
+
+---
+
+### P-002 — Productizing saved-login autofill needs lawyer review
+
+- **Status:** `raw-idea`
+- **Insight:** The mobile app captures portal credentials (with explicit user consent) into iOS Keychain and autofills them on subsequent launches. For single-user-on-own-device this is the same pattern Safari and every password manager already uses — no novel risk. **But for productized multi-tenant shipping, two distinct legal reviews are gating:**
+  1. **Apple App Store Review Guideline 5.1.5** (and the broader 5.1 family on data use). Section 5.1.5 specifically: "Apps must obtain user consent before collecting location data." More relevantly for us, 5.1.1(i-v) around data minimization, consent, and "data collected from people in healthcare-related apps must be handled carefully and with full user knowledge." Stanford/UCSF/etc. credentials are arguably "data collected from people" — Apple may interpret storing them as triggering additional review hurdles even though they never leave the device.
+  2. **Each portal's Terms of Service.** Stanford MyHealth, UCSF MyChart, etc. all have ToS the patient agreed to. Some Epic-derived portal ToS explicitly prohibit automated access or credential sharing with third-party apps. "Storing the user's password on the user's own phone for re-use" probably skates close to such language even if it isn't sharing. Worth a defensible interpretation before shipping.
+- **Origin:** Surfaced 2026-06-13 during mobile iteration 2 work, when implementing credential autofill via Keychain. The single-user version is fine; the productized version needs review.
+- **Why it matters:**
+  - **App Store rejection risk** — getting bounced on submission is a multi-week delay if 5.1.5/5.1.1 concerns surface late. Better to know the standard up front.
+  - **Portal hostility risk** — Stanford specifically demonstrated active anti-automation behavior (C-021, C-022). If the portal's lawyers interpret "stored credentials + automated form fill" as a ToS violation, they could legally pressure Apple to pull the app, or sue. Unlikely-but-real for a small shop.
+  - **Patient trust** — the value prop is "you control your records." That promise is undermined if a portal's lawsuit or App Store pull yanks the user's access mid-use.
+- **What would resolve this:**
+  - Healthcare-app attorney review of: (a) App Store guideline current interpretation for credential storage in patient-facing health apps; (b) representative portal ToS language re: automated access and credential storage; (c) what consent language and disclosures we need at credential-save time.
+  - Possibly Apple TestFlight + Review precedent search — find similar apps (PicnicHealth, Lucy, Apple Health Records itself indirectly) and see what they do.
+  - A documented threat model: what's the actual harm if credentials leak from a compromised user device, and is our Keychain handling sufficient mitigation? (Probably yes — same as every password manager — but document it.)
+- **Until reviewed — interim posture for any product that ships:**
+  - **Default to no credential storage.** Make autofill opt-in with a clear explainer screen, not the default flow.
+  - **Per-portal opt-in.** A user enabling autofill for Stanford shouldn't imply consent for UCSF.
+  - **Clear "Forget login" everywhere visible.** Not buried in settings.
+  - **Never sync credentials off-device.** No iCloud Keychain sync of OUR stored creds, no backend storage, no cross-device sharing. This is one of the easier defenses against "you shared my password" claims.
+  - **Don't transmit credentials anywhere except the portal itself, via the WebView the user can see.** Specifically: NOT to BinaHealth's backend, NOT to logs.
+- **Re-evaluation trigger:**
+  - Before any productized multi-tenant ship.
+  - If/when a portal updates ToS in a way that could affect this.
+  - If Apple updates 5.1.5 or guidance on health-credential storage.
