@@ -59,6 +59,15 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Timer? _keepaliveTimer;
   int _keepalivePings = 0;
 
+  // Diagnostics: off by default (clean UX). User toggles via overflow menu
+  // when they need to capture a screenshot for support. Resets on app
+  // restart — that's fine; this is a "turn it on, reproduce, screenshot,
+  // send" tool, not a persistent setting.
+  bool _showDiagnostics = false;
+  // Holds the most recent diagnostic line so the diag area survives
+  // setState rebuilds that don't relate to it.
+  String _diagLine = '';
+
   @override
   void dispose() {
     _keepaliveTimer?.cancel();
@@ -75,8 +84,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         actions: [
           PopupMenuButton<String>(
             onSelected: _onMenuSelected,
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'forget-login', child: Text('Forget saved login')),
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'forget-login', child: Text('Forget saved login')),
+              PopupMenuItem(
+                value: 'toggle-diagnostics',
+                child: Text(_showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'),
+              ),
             ],
           ),
         ],
@@ -112,6 +125,19 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                     child: Text(_currentUrl,
                         style: const TextStyle(fontSize: 11, color: Colors.black54),
                         overflow: TextOverflow.ellipsis),
+                  ),
+                if (_showDiagnostics && _diagLine.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(top: 6),
+                    padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'diag: $_diagLine',
+                      style: const TextStyle(fontSize: 10, color: Colors.black87, fontFamily: 'monospace'),
+                    ),
                   ),
               ],
             ),
@@ -221,14 +247,36 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   }
 
   /// Dev/diagnostic handler — JS injection emits wiring + capture trace.
-  /// Now that the flow works end-to-end, this is silent in normal operation
-  /// (just debugPrint). Re-enable the setState line if a future regression
-  /// needs visibility into what the JS is doing.
+  /// Always logs to console (debugPrint). Surfaces to the UI's diag strip
+  /// only when the user has flipped Show diagnostics in the overflow menu
+  /// — for capturing screenshots of failures to send back for support.
   Future<dynamic> _onLoginDiagHandler(List<dynamic> args) async {
     if (args.isEmpty || args.first is! Map) return {'ok': false};
     final m = Map<String, dynamic>.from(args.first as Map);
     debugPrint('[bina loginDiag] $m');
+    if (_showDiagnostics) {
+      final stage = m['stage']?.toString() ?? '?';
+      String summary;
+      if (stage == 'wired') {
+        summary = 'wired email=${m["hasEmail"]} pw=${m["hasPassword"]} '
+            'signIn=${m["hasSignIn"]} form=${m["hasForm"]}';
+      } else if (stage == 'capture-fired') {
+        summary = 'capture-fired via ${m["via"]} '
+            '(email-len=${m["emailLen"]} pw-len=${m["passwordLen"]})';
+      } else {
+        summary = '$stage: $m';
+      }
+      _updateDiag(summary);
+    }
     return {'ok': true};
+  }
+
+  /// Helper: only does the setState if the user has diagnostics on. Use
+  /// for cred handler progress and any other internal handler telemetry.
+  void _updateDiag(String line) {
+    debugPrint('[bina diag] $line');
+    if (!_showDiagnostics) return;
+    if (mounted) setState(() => _diagLine = line);
   }
 
   Future<void> _onMenuSelected(String value) async {
@@ -248,6 +296,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         content: Text('Saved Stanford login cleared from this device.'),
         duration: Duration(seconds: 3),
       ));
+    } else if (value == 'toggle-diagnostics') {
+      setState(() {
+        _showDiagnostics = !_showDiagnostics;
+        if (!_showDiagnostics) _diagLine = '';
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_showDiagnostics
+            ? 'Diagnostics on. Trace appears below the status line.'
+            : 'Diagnostics off.'),
+        duration: const Duration(seconds: 2),
+      ));
     }
   }
 
@@ -255,12 +315,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   /// the typed-or-autofilled credentials and, IF they're different from
   /// (or absent in) what we have stored, asks the user via Dialog.
   Future<dynamic> _onCapturedCredentialsHandler(List<dynamic> args) async {
-    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    _updateDiag('cred handler: entered');
+    if (args.isEmpty || args.first is! Map) {
+      _updateDiag('cred handler: bad args');
+      return {'ok': false};
+    }
     final m = Map<String, dynamic>.from(args.first as Map);
     final portal = (m['portal'] ?? 'stanford').toString();
     final email = (m['email'] ?? '').toString();
     final password = (m['password'] ?? '').toString();
     final wasAutofilled = m['wasAutofilled'] == true;
+    _updateDiag('cred handler: portal=$portal email-len=${email.length} '
+        'pw-len=${password.length} autofilled=$wasAutofilled');
     if (email.isEmpty || password.isEmpty) return {'ok': false};
 
     // Autofilled-and-unchanged → user signing in with the saved creds.
@@ -269,10 +335,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       try {
         final existing = await CredentialsStore.read(portal);
         if (existing != null && existing.email == email && existing.password == password) {
+          _updateDiag('cred handler: already saved, noop');
           return {'ok': true, 'action': 'noop'};
         }
       } catch (e) {
-        debugPrint('[bina cred handler] Keychain read failed: $e');
+        _updateDiag('cred handler: Keychain read err: ${e.toString().substring(0, 40)}');
       }
     }
 
