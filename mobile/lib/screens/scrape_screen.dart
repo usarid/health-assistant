@@ -360,18 +360,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   }
 
   // ── Keepalive (Dart-side safety net) ───────────────────────────────
+  // EXPERIMENT 2026-06-13: keepalive disabled entirely. Working hypothesis:
+  // injected keepalive fetches are themselves what Stanford's anti-abuse
+  // flags. If this batch completes without keepalive, we re-enable with a
+  // different mechanism (e.g., let the page's own JS handle it via clicks).
   void _startKeepalive() {
     _keepaliveTimer?.cancel();
     _keepalivePings = 0;
-    _keepaliveTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
-      if (_ctrl == null) return;
-      try {
-        await _ctrl!.evaluateJavascript(source: ScrapeJobs.keepalive());
-        setState(() => _keepalivePings++);
-      } catch (_) {
-        // WebView may be mid-navigation — fine, the per-visit JS will catch the next ping
-      }
-    });
+    // No-op — see comment above.
   }
 
   void _stopKeepalive() {

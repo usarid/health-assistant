@@ -14,9 +14,6 @@ class ScrapeJobs {
   ///
   /// Calls window.flutter_inappwebview.callHandler('saveNote', { csn, html, error? }).
   static String stanfordSingleNote() {
-    final keepaliveUrls = StanfordConfig.keepaliveUrls
-        .map((u) => "'$u'")
-        .join(', ');
     return '''
 (async () => {
   function send(payload) {
@@ -27,13 +24,13 @@ class ScrapeJobs {
     }
   }
 
-  // (1) Keepalive — fire-and-forget. fetch (not Image) because the server
-  //     returns 503 to Image GET (proven 2026-06-08). credentials:'include'
-  //     to send the session cookies.
-  for (const u of [$keepaliveUrls]) {
-    try { fetch(u, { method: 'GET', credentials: 'include', mode: 'cors' }); }
-    catch (_) {}
-  }
+  // (1) Keepalive intentionally DISABLED for this experiment (2026-06-13).
+  //     Working hypothesis: Stanford's anti-abuse flags injected keepalive
+  //     fetches differently than its own-page-code ones, causing session
+  //     revocation after a single rapid visit. If the batch completes
+  //     without keepalive, we know keepalive was the trigger. (The
+  //     Dart-side Timer is also short-circuited in scrape_screen.dart for
+  //     this run.)
 
   // (2) Scrape the Clinical Notes tab
   const m = location.href.match(/csn=([^&]+)/);
