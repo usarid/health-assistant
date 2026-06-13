@@ -309,10 +309,20 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   /// Pacing notes (2026-06-13 finding): Stanford rate-limits rapid-fire
   /// navigation. ~2s/visit triggered session revocation after ~20s. We
   /// pace conservatively: 4s settle + 3-7s jittered between visits.
-  /// Estimated run time at this cadence: ~15s/visit × 106 = ~26 min.
-  Future<Map<String, dynamic>?> _scrapeOneVisit(String csn) async {
+  /// Estimated run time at this cadence: ~15s/visit × 106 = ~22-26 min.
+  ///
+  /// Auto-retry on transient failure: the 91.5% baseline from 2026-06-13
+  /// had all errors as `timeout-waiting-for-pgSection` — page loaded but
+  /// .pgSection didn't render within the 15s JS poll. On that one error
+  /// we retry once with 8s settle + 25s poll. Other errors are non-
+  /// transient (session-dead) or already-recursed and propagate as-is.
+  Future<Map<String, dynamic>?> _scrapeOneVisit(String csn, {int attempt = 1}) async {
     final url = StanfordConfig.visitDetailUrlPattern
         .replaceAll('%CSN%', Uri.encodeComponent(csn));
+
+    // Longer settle and poll on retry.
+    final settleSeconds = attempt == 1 ? 4 : 8;
+    final pollMs = attempt == 1 ? 15000 : 25000;
 
     _navCompleter = Completer<void>();
     try {
@@ -326,14 +336,9 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       return {'error': 'nav-timeout'};
     }
 
-    // Settle delay — Stanford's JS framework needs time to render the Past
-    // Visit Details page with its tabs after the HTML loads. 4s is the
-    // tested-safe minimum from the Chrome MCP runs.
-    await Future.delayed(const Duration(seconds: 4));
+    await Future.delayed(Duration(seconds: settleSeconds));
 
-    // Detect session death BEFORE wasting an inject attempt. If we got
-    // redirected to login or the home page, our URL no longer contains
-    // 'after-visit-summary'. The whole batch should bail in this case.
+    // Detect session death BEFORE wasting an inject attempt.
     final landedUri = await _ctrl!.getUrl();
     final landedStr = landedUri?.toString() ?? '';
     if (!landedStr.contains('after-visit-summary')) {
@@ -342,15 +347,28 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
     _scrapeCompleter = Completer<Map<String, dynamic>>();
     try {
-      await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordSingleNote());
+      await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordSingleNote(pollMs: pollMs));
     } catch (e) {
       return {'error': 'inject-failed: $e'};
     }
+    Map<String, dynamic> result;
     try {
-      return await _scrapeCompleter!.future.timeout(const Duration(seconds: 25));
+      result = await _scrapeCompleter!.future
+          .timeout(Duration(milliseconds: pollMs + 10000));
     } on TimeoutException {
-      return {'error': 'scrape-timeout'};
+      result = {'error': 'scrape-timeout'};
     }
+
+    // Auto-retry the one transient failure mode we've seen empirically.
+    final err = result['error']?.toString();
+    final transient = err != null &&
+        (err == 'timeout-waiting-for-pgSection' || err == 'scrape-timeout');
+    if (transient && attempt == 1) {
+      // Brief cool-off before retry so Stanford isn't seeing back-to-back hits
+      await Future.delayed(const Duration(seconds: 3));
+      return _scrapeOneVisit(csn, attempt: 2);
+    }
+    return result;
   }
 
   static String _truncForLog(String s) {

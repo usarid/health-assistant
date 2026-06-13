@@ -13,7 +13,7 @@ class ScrapeJobs {
   ///      extract its outerHTML, call back to Dart via the saveNote handler.
   ///
   /// Calls window.flutter_inappwebview.callHandler('saveNote', { csn, html, error? }).
-  static String stanfordSingleNote() {
+  static String stanfordSingleNote({int pollMs = 15000}) {
     return '''
 (async () => {
   function send(payload) {
@@ -50,9 +50,9 @@ class ScrapeJobs {
 
   // Stanford renders the body inside a .pgSection div. Real content is
   // ~9-200 KB; skeleton-only is ~750 chars. Threshold of 200 chars catches
-  // any successful render. 15s upper bound per visit.
+  // any successful render. Poll-window upper bound configurable by caller.
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 15000) {
+  while (Date.now() - startedAt < $pollMs) {
     await new Promise(r => setTimeout(r, 400));
     const section = document.querySelector('.pgSection');
     if (section && section.textContent.length > 200) {
