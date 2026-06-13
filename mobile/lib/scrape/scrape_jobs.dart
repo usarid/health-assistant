@@ -1,18 +1,22 @@
-import 'stanford_config.dart';
-
 /// JS scripts the host injects into the WebView per scrape job.
 class ScrapeJobs {
   /// Per-visit Stanford scrape. Runs on a
   /// /signedin/appointments/after-visit-summary/csn=X&encType=3 page.
   ///
-  /// Two things happen:
-  ///   1. Fire-and-forget keepalive pings — every visit's scrape
-  ///      contributes to keeping both Stanford sessions warm. At ~10s per
-  ///      visit this is plenty of cadence.
-  ///   2. Click the Clinical Notes tab, poll for the .pgSection container,
-  ///      extract its outerHTML, call back to Dart via the saveNote handler.
+  /// Two layouts in the wild:
+  ///   - **Inline view**: Clinical Notes tab opens to a single rendered note
+  ///     in `.pgSection`. Old code path — capture `.pgSection.outerHTML` and
+  ///     send.
+  ///   - **List view**: Clinical Notes tab opens to a list of "VIEW NOTE"
+  ///     buttons (one per note). These are the multi-note visits — typically
+  ///     hospital stays with nursing + progress + consults + discharge notes
+  ///     all under one CSN. Original v3 scraper missed these entirely
+  ///     (capture=0 on 9/106 visits in 2026-06-13 run). New code path:
+  ///     iterate buttons, click → wait for body → capture → back → repeat.
   ///
-  /// Calls window.flutter_inappwebview.callHandler('saveNote', { csn, html, error? }).
+  /// Sends to Dart via callHandler('saveNote', payload):
+  ///   - single-note: { csn, html, error? }
+  ///   - multi-note:  { csn, html: '', notes: [{label, html}, ...] }
   static String stanfordSingleNote({int pollMs = 15000}) {
     return '''
 (async () => {
@@ -24,59 +28,121 @@ class ScrapeJobs {
     }
   }
 
-  // (1) Keepalive intentionally DISABLED for this experiment (2026-06-13).
-  //     Working hypothesis: Stanford's anti-abuse flags injected keepalive
-  //     fetches differently than its own-page-code ones, causing session
-  //     revocation after a single rapid visit. If the batch completes
-  //     without keepalive, we know keepalive was the trigger. (The
-  //     Dart-side Timer is also short-circuited in scrape_screen.dart for
-  //     this run.)
-
-  // (2) Scrape the Clinical Notes tab
   const m = location.href.match(/csn=([^&]+)/);
   const csn = m ? decodeURIComponent(m[1]) : 'unknown';
 
-  const candidates = Array.from(document.querySelectorAll('li, a, button'))
-    .filter(el => /Clinical Notes/i.test(el.textContent || ''));
-  const tab = candidates.find(el => (el.textContent || '').trim() === 'Clinical Notes')
-    || candidates[0];
+  function clickClinicalNotesTab() {
+    const candidates = Array.from(document.querySelectorAll('li, a, button'))
+      .filter(el => /Clinical Notes/i.test(el.textContent || ''));
+    const tab = candidates.find(el => (el.textContent || '').trim() === 'Clinical Notes')
+      || candidates[0];
+    if (tab) tab.click();
+    return !!tab;
+  }
 
-  if (!tab) {
+  function findViewNoteButtons() {
+    return Array.from(document.querySelectorAll('a, button'))
+      .filter(el => /^\\s*view\\s*note\\s*\$/i.test(el.textContent || ''));
+  }
+
+  async function ensureListView() {
+    let btns = findViewNoteButtons();
+    if (btns.length > 0) return btns;
+    clickClinicalNotesTab();
+    const t = Date.now();
+    while (Date.now() - t < 5000) {
+      await new Promise(r => setTimeout(r, 300));
+      btns = findViewNoteButtons();
+      if (btns.length > 0) return btns;
+    }
+    return [];
+  }
+
+  if (!clickClinicalNotesTab()) {
     send({ csn, html: '', error: 'no-notes-tab' });
     return;
   }
 
-  tab.click();
-
-  // Stanford renders the body inside a .pgSection div. Real content is
-  // ~9-200 KB; skeleton-only is ~750 chars. Threshold of 200 chars catches
-  // any successful render. Poll-window upper bound configurable by caller.
+  // Race window: poll for either (a) VIEW NOTE buttons → list view, or
+  // (b) .pgSection grows past 200 chars → inline note rendered. Check
+  // buttons FIRST each tick — on a multi-note visit, .pgSection may have
+  // the list text >200 chars even when buttons are the right path.
   const startedAt = Date.now();
+  let mode = null;
   while (Date.now() - startedAt < $pollMs) {
     await new Promise(r => setTimeout(r, 400));
+    if (findViewNoteButtons().length > 0) { mode = 'list'; break; }
     const section = document.querySelector('.pgSection');
-    if (section && section.textContent.length > 200) {
-      send({ csn, html: section.outerHTML });
-      return;
+    if (section && section.textContent.length > 200) { mode = 'inline'; break; }
+  }
+
+  if (mode === 'inline') {
+    send({ csn, html: document.querySelector('.pgSection').outerHTML });
+    return;
+  }
+
+  if (mode === 'list') {
+    const initialButtonCount = findViewNoteButtons().length;
+    const notes = [];
+
+    for (let i = 0; i < initialButtonCount; i++) {
+      const btns = await ensureListView();
+      if (i >= btns.length) break;
+      const btn = btns[i];
+
+      // Snapshot row label (note title + signer + date) for downstream
+      // categorization. Strips "VIEW NOTE" itself, collapses whitespace.
+      const row = btn.closest('tr') || btn.closest('li') || btn.closest('div');
+      const label = (row?.textContent || '')
+        .replace(/view\\s*note/gi, '')
+        .replace(/\\s+/g, ' ')
+        .trim()
+        .slice(0, 200);
+
+      const beforeUrl = location.href;
+      const beforeText = document.querySelector('.pgSection')?.textContent || '';
+      btn.click();
+
+      // Wait for the per-note body to render. Either URL changed (separate
+      // note-detail page) or .pgSection content grew substantially in place.
+      // 1500 char threshold filters out re-renders that are just larger list
+      // skeletons; real note bodies are 5–200 KB.
+      let html = '';
+      const t0 = Date.now();
+      while (Date.now() - t0 < 15000) {
+        await new Promise(r => setTimeout(r, 400));
+        const section = document.querySelector('.pgSection');
+        const text = section?.textContent || '';
+        if (section && text.length > 1500 && text !== beforeText) {
+          html = section.outerHTML;
+          break;
+        }
+      }
+
+      notes.push({ label, html, htmlLength: html.length });
+
+      // Navigate back to the list. Prefer history.back() when click changed
+      // the URL; otherwise look for an in-page back affordance.
+      if (location.href !== beforeUrl) {
+        history.back();
+      } else {
+        const back = Array.from(document.querySelectorAll('a, button'))
+          .find(el => /back\\s+to|return/i.test(el.textContent || ''));
+        if (back) back.click();
+      }
+      await new Promise(r => setTimeout(r, 800));
     }
+
+    if (notes.length === 0) {
+      send({ csn, html: '', error: 'list-view-no-notes-captured' });
+    } else {
+      send({ csn, html: '', notes });
+    }
+    return;
   }
 
   send({ csn, html: '', error: 'timeout-waiting-for-pgSection' });
 })();
-''';
-  }
-
-  /// Standalone keepalive — fired by the Dart-side Timer.periodic every 30s
-  /// as a safety net if a per-visit scrape hangs and stops contributing to
-  /// the per-visit keepalive in stanfordSingleNote().
-  static String keepalive() {
-    final urls = StanfordConfig.keepaliveUrls.map((u) => "'$u'").join(', ');
-    return '''
-for (const u of [$urls]) {
-  try { fetch(u, { method: 'GET', credentials: 'include', mode: 'cors' }); }
-  catch (_) {}
-}
-true;
 ''';
   }
 

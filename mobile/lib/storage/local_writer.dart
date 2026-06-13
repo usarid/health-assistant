@@ -10,12 +10,17 @@ import 'package:path_provider/path_provider.dart';
 ///   - A running manifest (rewritten every note for incremental safety)
 ///     + a final consolidated batch JSON at run end
 ///
+/// Per-CSN payloads come in two flavors:
+///   - **single**: one inline note rendered in the visit's Clinical Notes
+///     tab. Persisted as { csn, html, ... }.
+///   - **multi**: a list view where each row needs a VIEW NOTE click.
+///     Persisted as { csn, html: '', notes: [{label, html, htmlLength}, ...] }.
+///
 /// All files land in the app's documents directory. On iOS Simulator
 /// that's under ~/Library/Developer/CoreSimulator/Devices/<dev>/
 /// data/Containers/Data/Application/<app>/Documents/.
 class LocalWriter {
-  /// Write one captured note to its own file. Called after every successful
-  /// scrape so partial progress survives a crash.
+  /// Write one captured inline note to its own file.
   static Future<String> writeNote(String csn, String html) async {
     final dir = await getApplicationDocumentsDirectory();
     final notesDir = Directory('${dir.path}/notes');
@@ -26,6 +31,26 @@ class LocalWriter {
       'savedAt': DateTime.now().toUtc().toIso8601String(),
       'htmlLength': html.length,
       'html': html,
+    });
+    await file.writeAsString(body);
+    return file.path;
+  }
+
+  /// Write a multi-note visit's per-note payload to a single file keyed by
+  /// the parent CSN. The JSON contains an array of sub-notes (each with
+  /// its row label + HTML). One file per CSN keeps the resilience model
+  /// intact (a crash mid-iteration leaves the previously-captured CSNs
+  /// fully written; the in-progress CSN is just absent).
+  static Future<String> writeMultiNote(String csn, List<SubNote> notes) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final notesDir = Directory('${dir.path}/notes');
+    await notesDir.create(recursive: true);
+    final file = File('${notesDir.path}/stanford-multinote-${_csnSlug(csn)}.json');
+    final body = jsonEncode({
+      'csn': csn,
+      'savedAt': DateTime.now().toUtc().toIso8601String(),
+      'noteCount': notes.length,
+      'notes': notes.map((n) => n.toJson()).toList(),
     });
     await file.writeAsString(body);
     return file.path;
@@ -101,24 +126,60 @@ class LocalWriter {
   }
 }
 
+/// One CSN's payload in the consolidated batch. For single-note visits,
+/// [html] holds the inline note's outerHTML and [subNotes] is null. For
+/// multi-note visits, [html] is empty and [subNotes] holds the per-note
+/// captures. [htmlLength]/[visibleTextLength] are the aggregate across
+/// sub-notes when multi.
 class CapturedNote {
   final String csn;
   final String html;
   final int htmlLength;
   final int visibleTextLength;
   final DateTime capturedAt;
+  final List<SubNote>? subNotes;
+
   CapturedNote({
     required this.csn,
     required this.html,
     required this.htmlLength,
     required this.visibleTextLength,
     required this.capturedAt,
+    this.subNotes,
   });
+
+  bool get isMulti => subNotes != null && subNotes!.isNotEmpty;
+
   Map<String, dynamic> toJson() => {
     'csn': csn,
     'htmlLength': htmlLength,
     'visibleTextLength': visibleTextLength,
     'capturedAt': capturedAt.toUtc().toIso8601String(),
+    'html': html,
+    if (subNotes != null) 'notes': subNotes!.map((n) => n.toJson()).toList(),
+  };
+}
+
+/// One row inside a multi-note visit (e.g., "Care Plan Note · Signed by
+/// Jennifer Tu, RN on 3/26/2024 at 6:05 AM"). The label is the raw row
+/// text from the list page; downstream parsing extracts title/signer/date.
+class SubNote {
+  final String label;
+  final String html;
+  final int htmlLength;
+  final int visibleTextLength;
+
+  SubNote({
+    required this.label,
+    required this.html,
+    required this.htmlLength,
+    required this.visibleTextLength,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'label': label,
+    'htmlLength': htmlLength,
+    'visibleTextLength': visibleTextLength,
     'html': html,
   };
 }

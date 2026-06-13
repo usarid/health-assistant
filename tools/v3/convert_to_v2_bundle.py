@@ -274,12 +274,33 @@ def convert_note(note, portal, src_file, scraper_ver):
     start_dt = v_date(visit)
     date_iso = start_dt.split('T')[0] + 'T00:00:00Z' if start_dt else None
 
-    # Same det_id scheme as the encounter — guarantees the linkage matches
+    # Same det_id scheme as the encounter — guarantees the linkage matches.
+    # On multi-note visits (mobile list-view capture: one CSN, N notes
+    # each behind its own VIEW NOTE button), _provenance.subIndex makes
+    # each sub-note's DocumentReference rid distinct from its siblings
+    # while sharing the same encounter rid.
+    sub_index = (note.get('_provenance') or {}).get('subIndex')
+    sub_key = f'__{sub_index}' if sub_index is not None else ''
     enc_rid = det_id(cfg['enc_prefix'], csn or visit_type, start_dt or '', provider)
-    docref_rid = det_id(cfg['docref_prefix'], csn or visit_type, start_dt or '', provider)
+    docref_rid = det_id(cfg['docref_prefix'], csn or visit_type, start_dt or '', provider + sub_key)
+
+    # For multi-note (list-view) visits, prefer the per-note row label
+    # over the visit type so a hospital stay's 12 notes render as
+    # "Discharge Summary", "Care Plan Note", "Progress Notes" etc. rather
+    # than 12 identical "Clinical Note - Hospital Encounter" rows.
+    note_label = (note.get('_provenance') or {}).get('noteLabel') or ''
+    note_title = ''
+    note_author = ''
+    if note_label:
+        note_title = re.split(r'\s*signed\s+by\s+', note_label, maxsplit=1, flags=re.I)[0].strip()
+        author_match = re.search(r'signed\s+by\s+(.+?)\s+on\s+', note_label, flags=re.I)
+        if author_match:
+            note_author = author_match.group(1).strip()
 
     type_text = 'Clinical Note'
-    if visit_type:
+    if note_title:
+        type_text = f'Clinical Note - {note_title}'
+    elif visit_type:
         type_text = f'Clinical Note - {visit_type}'
 
     tags = [
@@ -297,11 +318,12 @@ def convert_note(note, portal, src_file, scraper_ver):
 
     content = []
     if report_html and has_real_body:
+        title_subject = note_title or visit_type
         content.append({
             'attachment': {
                 'contentType': 'text/html',
                 'data': base64.b64encode(report_html.encode('utf-8')).decode('ascii'),
-                'title': f'{visit_type} - {start_dt}' if visit_type and start_dt else (visit_type or start_dt or ''),
+                'title': f'{title_subject} - {start_dt}' if title_subject and start_dt else (title_subject or start_dt or ''),
             }
         })
     elif report_html:
@@ -323,8 +345,12 @@ def convert_note(note, portal, src_file, scraper_ver):
         docref['identifier'] = identifiers
     if date_iso:
         docref['date'] = date_iso
-    if provider:
-        docref['author'] = [{'display': provider}]
+    # Prefer the per-note signer (parsed from the multi-note label) over
+    # the visit-level provider, so each sub-note's DocRef shows the actual
+    # signing clinician.
+    author_display = note_author or provider
+    if author_display:
+        docref['author'] = [{'display': author_display}]
     if dept:
         docref['custodian'] = {'display': dept}
     if content:

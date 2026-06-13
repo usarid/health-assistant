@@ -507,8 +507,38 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         } else {
           final html = (res['html'] ?? '').toString();
           final err = res['error']?.toString();
+          final rawNotes = res['notes'];
           if (err != null && err.isNotEmpty) {
             _errors.add(ScrapeError(csn: csn, index: i, reason: err, at: DateTime.now()));
+          } else if (rawNotes is List && rawNotes.isNotEmpty) {
+            // Multi-note (list-view) visit — array of {label, html, htmlLength}
+            final subs = <SubNote>[];
+            for (final n in rawNotes) {
+              if (n is! Map) continue;
+              final label = (n['label'] ?? '').toString();
+              final subHtml = (n['html'] ?? '').toString();
+              final subLen = (n['htmlLength'] is int)
+                  ? n['htmlLength'] as int
+                  : subHtml.length;
+              final plainSub = subHtml.replaceAll(RegExp(r'<[^>]+>'), '').trim();
+              subs.add(SubNote(
+                label: label,
+                html: subHtml,
+                htmlLength: subLen,
+                visibleTextLength: plainSub.length,
+              ));
+            }
+            final aggHtml = subs.fold<int>(0, (a, s) => a + s.htmlLength);
+            final aggText = subs.fold<int>(0, (a, s) => a + s.visibleTextLength);
+            _captured.add(CapturedNote(
+              csn: csn,
+              html: '',
+              htmlLength: aggHtml,
+              visibleTextLength: aggText,
+              capturedAt: DateTime.now(),
+              subNotes: subs,
+            ));
+            await LocalWriter.writeMultiNote(csn, subs);
           } else {
             final plain = html.replaceAll(RegExp(r'<[^>]+>'), '').trim();
             _captured.add(CapturedNote(
@@ -549,25 +579,24 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   }
 
   /// One iteration of the loop. Returns null if navigation never settled;
-  /// otherwise the saveNote handler's payload (containing 'html' or 'error').
+  /// otherwise the saveNote handler's payload — single-note shape
+  /// `{html, error?}` or multi-note shape `{html: '', notes: [...]}`.
   ///
   /// Pacing notes (2026-06-13 finding): Stanford rate-limits rapid-fire
   /// navigation. ~2s/visit triggered session revocation after ~20s. We
   /// pace conservatively: 4s settle + 3-7s jittered between visits.
-  /// Estimated run time at this cadence: ~15s/visit × 106 = ~22-26 min.
+  /// Multi-note visits take longer (each VIEW NOTE click inside the JS
+  /// adds ~5-10s); the per-visit timeout below covers them.
   ///
-  /// Auto-retry on transient failure: the 91.5% baseline from 2026-06-13
-  /// had all errors as `timeout-waiting-for-pgSection` — page loaded but
-  /// .pgSection didn't render within the 15s JS poll. On that one error
-  /// we retry once with 8s settle + 25s poll. Other errors are non-
-  /// transient (session-dead) or already-recursed and propagate as-is.
-  Future<Map<String, dynamic>?> _scrapeOneVisit(String csn, {int attempt = 1}) async {
+  /// No retry: every error in the 2026-06-13 9-failure run was structural
+  /// (list-view, fixed by the multi-note JS branch), not transient. If a
+  /// genuinely slow-render case appears later, narrow retry can come back.
+  Future<Map<String, dynamic>?> _scrapeOneVisit(String csn) async {
     final url = StanfordConfig.visitDetailUrlPattern
         .replaceAll('%CSN%', Uri.encodeComponent(csn));
 
-    // Longer settle and poll on retry.
-    final settleSeconds = attempt == 1 ? 4 : 8;
-    final pollMs = attempt == 1 ? 15000 : 25000;
+    const settleSeconds = 4;
+    const pollMs = 15000;
 
     _navCompleter = Completer<void>();
     try {
@@ -581,7 +610,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       return {'error': 'nav-timeout'};
     }
 
-    await Future.delayed(Duration(seconds: settleSeconds));
+    await Future.delayed(const Duration(seconds: settleSeconds));
 
     // Detect session death BEFORE wasting an inject attempt.
     final landedUri = await _ctrl!.getUrl();
@@ -596,24 +625,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } catch (e) {
       return {'error': 'inject-failed: $e'};
     }
-    Map<String, dynamic> result;
+    // Multi-note visits iterate VIEW NOTE buttons inside the JS — each
+    // adds ~5-10s of polling. Allow up to 3 min total for a 20-note
+    // hospital-stay visit; covers everything we've seen in v3 visits.
     try {
-      result = await _scrapeCompleter!.future
-          .timeout(Duration(milliseconds: pollMs + 10000));
+      return await _scrapeCompleter!.future.timeout(const Duration(minutes: 3));
     } on TimeoutException {
-      result = {'error': 'scrape-timeout'};
+      return {'error': 'scrape-timeout'};
     }
-
-    // Auto-retry the one transient failure mode we've seen empirically.
-    final err = result['error']?.toString();
-    final transient = err != null &&
-        (err == 'timeout-waiting-for-pgSection' || err == 'scrape-timeout');
-    if (transient && attempt == 1) {
-      // Brief cool-off before retry so Stanford isn't seeing back-to-back hits
-      await Future.delayed(const Duration(seconds: 3));
-      return _scrapeOneVisit(csn, attempt: 2);
-    }
-    return result;
   }
 
   static String _truncForLog(String s) {
