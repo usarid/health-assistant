@@ -66,6 +66,35 @@ class LocalWriter {
     return file.path;
   }
 
+  /// Read the most recent consolidated batch file from the docs directory
+  /// and return the CSNs that errored in it. Empty list if there's no
+  /// prior batch or if the prior batch had zero errors.
+  ///
+  /// Used by the "Retry failed visits" affordance — feeds those CSNs back
+  /// into the scrape loop as a small reverification batch.
+  static Future<List<String>> findFailedCsnsInLastBatch() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final entries = await Directory(dir.path).list().toList();
+    final batches = entries
+        .whereType<File>()
+        .where((f) =>
+            f.path.contains('stanford-batch-2') &&
+            !f.path.contains('manifest'))
+        .toList()
+      ..sort((a, b) => b.path.compareTo(a.path));
+    if (batches.isEmpty) return const [];
+    final raw = await batches.first.readAsString();
+    final m = jsonDecode(raw);
+    if (m is! Map) return const [];
+    final errors = m['errors'];
+    if (errors is! List) return const [];
+    final out = <String>[];
+    for (final e in errors) {
+      if (e is Map && e['csn'] is String) out.add(e['csn'] as String);
+    }
+    return out;
+  }
+
   static String _csnSlug(String csn) {
     final safe = csn.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     return safe.length > 32 ? safe.substring(0, 32) : safe;

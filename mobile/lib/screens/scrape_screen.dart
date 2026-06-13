@@ -90,6 +90,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 value: 'toggle-diagnostics',
                 child: Text(_showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'),
               ),
+              const PopupMenuItem(value: 'retry-failures', child: Text('Retry failed visits')),
             ],
           ),
         ],
@@ -308,6 +309,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
             : 'Diagnostics off.'),
         duration: const Duration(seconds: 2),
       ));
+    } else if (value == 'retry-failures') {
+      final failed = await LocalWriter.findFailedCsnsInLastBatch();
+      if (!mounted) return;
+      if (failed.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No failed visits in the most recent batch — '
+              'run "Scrape all" first.'),
+          duration: Duration(seconds: 3),
+        ));
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Retrying ${failed.length} failed visits…'),
+        duration: const Duration(seconds: 3),
+      ));
+      await _scrapeAll(overrideCsns: failed);
     }
   }
 
@@ -432,11 +449,16 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   }
 
   // ── The actual loop ────────────────────────────────────────────────
-  Future<void> _scrapeAll() async {
+  /// Scrape every visit in [overrideCsns] if provided; otherwise load the
+  /// full visit list from the bundled asset. Used by both the primary
+  /// "Scrape all" FAB and the "Retry failed visits" menu action.
+  Future<void> _scrapeAll({List<String>? overrideCsns}) async {
     if (_batchRunning) return;
-    final csns = await _loadCsnList();
+    final csns = overrideCsns ?? await _loadCsnList();
     if (csns.isEmpty) {
-      setState(() => _status = 'Could not load CSN list from assets/stanford-v3-visits.json');
+      setState(() => _status = overrideCsns != null
+          ? 'No failed visits to retry.'
+          : 'Could not load CSN list from assets/stanford-v3-visits.json');
       return;
     }
 
