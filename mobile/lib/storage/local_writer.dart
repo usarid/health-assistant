@@ -91,6 +91,20 @@ class LocalWriter {
     return file.path;
   }
 
+  /// Append one diag event to the current batch's diag JSONL file. Each
+  /// line is a self-contained JSON object — easy to grep/parse later.
+  /// Metadata only (URL paths, lengths, counts); never note text or labels.
+  /// File path includes the batch start timestamp so consecutive runs don't
+  /// clobber each other.
+  static Future<void> appendDiagLine(DateTime batchStartedAt, Map<String, dynamic> event) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = batchStartedAt.toUtc().toIso8601String().replaceAll(':', '-');
+    final file = File('${dir.path}/stanford-diag-$ts.jsonl');
+    final stamped = Map<String, dynamic>.from(event);
+    stamped['at'] = DateTime.now().toUtc().toIso8601String();
+    await file.writeAsString('${jsonEncode(stamped)}\n', mode: FileMode.append, flush: false);
+  }
+
   /// Read the most recent consolidated batch file from the docs directory
   /// and return the CSNs that errored in it. Empty list if there's no
   /// prior batch or if the prior batch had zero errors.

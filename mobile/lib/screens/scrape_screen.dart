@@ -54,6 +54,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   final List<CapturedNote> _captured = [];
   final List<ScrapeError> _errors = [];
   DateTime? _batchStartedAt;
+  // CSN currently being scraped — surfaces in every noteDiag line so the
+  // post-run JSONL ties emits back to a specific visit without anyone
+  // needing to correlate timestamps.
+  String? _currentCsn;
 
   // Keepalive (Dart-side safety net)
   Timer? _keepaliveTimer;
@@ -286,13 +290,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
   /// Diagnostic stream from the multi-note scrape loop. Each call corresponds
   /// to one stage (mode-detected, list-entered, pre-click, post-click,
-  /// post-back, list-done, iter-aborted). Always console-logged; surfaced
-  /// to the UI's diag strip only when [_showDiagnostics] is on.
+  /// post-back, list-done, iter-aborted). Always console-logged AND
+  /// appended to a per-batch JSONL file (so post-run inspection doesn't
+  /// require live screenshots). Surfaced to the UI's diag strip only when
+  /// [_showDiagnostics] is on.
   Future<dynamic> _onNoteDiagHandler(List<dynamic> args) async {
     if (args.isEmpty || args.first is! Map) return {'ok': false};
     final m = Map<String, dynamic>.from(args.first as Map);
     final stage = m['stage']?.toString() ?? '?';
     debugPrint('[bina noteDiag] $stage $m');
+    if (_batchStartedAt != null) {
+      final stamped = Map<String, dynamic>.from(m);
+      stamped['csn'] = _currentCsn;
+      stamped['batchIndex'] = _batchIndex;
+      // Fire-and-forget — never block JS callback on file IO
+      LocalWriter.appendDiagLine(_batchStartedAt!, stamped);
+    }
     if (!_showDiagnostics) return {'ok': true};
     // Compact one-liner — order key fields by stage so the most relevant
     // bits show up first.
@@ -522,6 +535,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           break;
         }
         final csn = csns[i];
+        _currentCsn = csn;
         setState(() => _batchIndex = i + 1);
         await LocalWriter.writeBatchManifest(BatchManifest(
           startedAt: _batchStartedAt!,
