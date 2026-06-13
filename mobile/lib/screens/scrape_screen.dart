@@ -265,48 +265,83 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
   /// Called from injected JS when the Sign In button is tapped. Captures
   /// the typed-or-autofilled credentials and, IF they're different from
-  /// (or absent in) what we have stored, asks the user to save them.
+  /// (or absent in) what we have stored, asks the user via Dialog (not
+  /// SnackBar — Dialog is modal and definitely visible regardless of
+  /// any concurrent navigation).
   Future<dynamic> _onCapturedCredentialsHandler(List<dynamic> args) async {
-    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    if (mounted) setState(() => _status = 'cred handler: entered');
+    if (args.isEmpty || args.first is! Map) {
+      if (mounted) setState(() => _status = 'cred handler: bad args');
+      return {'ok': false};
+    }
     final m = Map<String, dynamic>.from(args.first as Map);
     final portal = (m['portal'] ?? 'stanford').toString();
     final email = (m['email'] ?? '').toString();
     final password = (m['password'] ?? '').toString();
     final wasAutofilled = m['wasAutofilled'] == true;
+
+    if (mounted) {
+      setState(() => _status =
+          'cred handler: portal=$portal email-len=${email.length} pw-len=${password.length} autofilled=$wasAutofilled');
+    }
+
     if (email.isEmpty || password.isEmpty) return {'ok': false};
 
-    // Autofilled-and-unchanged → user is signing in with what we already
-    // have. No need to ask again.
+    // Autofilled-and-unchanged → user signing in with what we already
+    // have. Skip the prompt. Wrap in try/catch — Keychain reads can fail
+    // on first-launch in some sim configurations.
     if (wasAutofilled) {
-      final existing = await CredentialsStore.read(portal);
-      if (existing != null && existing.email == email && existing.password == password) {
-        return {'ok': true, 'action': 'noop'};
+      try {
+        final existing = await CredentialsStore.read(portal);
+        if (existing != null && existing.email == email && existing.password == password) {
+          if (mounted) setState(() => _status = 'cred handler: already saved, noop');
+          return {'ok': true, 'action': 'noop'};
+        }
+      } catch (e) {
+        if (mounted) setState(() => _status = 'cred handler: read err: ${e.toString().substring(0, 40)}');
       }
     }
 
-    // Show consent SnackBar. Don't write anything until the user taps Save.
     if (!mounted) return {'ok': false};
-    final scaffold = ScaffoldMessenger.of(context);
-    scaffold.hideCurrentSnackBar();
-    scaffold.showSnackBar(SnackBar(
-      duration: const Duration(seconds: 12),
-      content: const Text(
-        'Save this Stanford login on this device? Stored in iOS Keychain, '
-        'never leaves the phone.',
-        style: TextStyle(fontSize: 13),
+
+    // Use a modal Dialog rather than SnackBar — SnackBars on iOS WebView
+    // pages can get dismissed by intervening navigation; Dialogs sit on
+    // top of the navigator stack and require explicit dismissal.
+    if (mounted) setState(() => _status = 'cred handler: showing dialog');
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Save Stanford login?'),
+        content: const Text(
+          'Store the email + password on this device (iOS Keychain) so '
+          'next time you can skip typing them.\n\n'
+          'They never leave this phone. Tap "Forget saved login" in the '
+          'menu later to remove them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: const Text('Not now'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: const Text('Save'),
+          ),
+        ],
       ),
-      action: SnackBarAction(
-        label: 'Save',
-        onPressed: () async {
-          await CredentialsStore.save(portal: portal, email: email, password: password);
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Saved. Will autofill next time.'),
-            duration: Duration(seconds: 3),
-          ));
-        },
-      ),
-    ));
+    );
+
+    if (shouldSave == true) {
+      try {
+        await CredentialsStore.save(portal: portal, email: email, password: password);
+        if (mounted) setState(() => _status = 'cred handler: saved ✓');
+      } catch (e) {
+        if (mounted) setState(() => _status = 'cred handler: save err: ${e.toString().substring(0, 40)}');
+      }
+    } else {
+      if (mounted) setState(() => _status = 'cred handler: user declined');
+    }
     return {'ok': true};
   }
 
