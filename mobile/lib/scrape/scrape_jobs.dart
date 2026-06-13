@@ -80,8 +80,13 @@ true;
 ''';
   }
 
-  /// Injected on every load that lands on a Stanford login page. Does TWO
-  /// things on a tap of the "Sign In" button:
+  /// Injected on every load that lands on a Stanford login page. Stanford
+  /// is an Angular SPA — login form fields are typically NOT in the DOM
+  /// when onLoadStop first fires, they appear a beat or two later. So
+  /// instead of probing once, we install a MutationObserver that wires
+  /// up the moment the inputs+button exist, then disconnects.
+  ///
+  /// What "wiring up" does, on tap of the Sign In button:
   ///   1. If there are stored creds (autofillEmail/autofillPassword passed
   ///      in), set them into the form fields BEFORE the user sees the page.
   ///      They tap Sign In themselves.
@@ -90,7 +95,7 @@ true;
   ///      the 'capturedCredentials' handler. Dart decides whether to ask
   ///      the user to save them.
   ///
-  /// Idempotent — re-injecting on a page that already wired up is a no-op.
+  /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,
     String? autofillPassword,
@@ -104,7 +109,9 @@ true;
     return '''
 (() => {
   if (window.__binaLoginWired) return 'already-wired';
-  window.__binaLoginWired = true;
+
+  const autofillEmail = $emailJs;
+  const autofillPassword = $passwordJs;
 
   function findEmailInput() {
     return document.querySelector('input[type="email"]')
@@ -132,44 +139,62 @@ true;
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  const emailInput = findEmailInput();
-  const passwordInput = findPasswordInput();
-  const signIn = findSignInButton();
+  function tryWire() {
+    const emailInput = findEmailInput();
+    const passwordInput = findPasswordInput();
+    if (!emailInput || !passwordInput) return false;
 
-  if (!emailInput || !passwordInput) {
-    // Not a login page (or markup changed). Bail without harm.
-    return 'no-login-fields';
-  }
+    window.__binaLoginWired = true;
 
-  // (1) Autofill if we have stored creds
-  const autofillEmail = $emailJs;
-  const autofillPassword = $passwordJs;
-  if (autofillEmail) setValue(emailInput, autofillEmail);
-  if (autofillPassword) setValue(passwordInput, autofillPassword);
+    if (autofillEmail) setValue(emailInput, autofillEmail);
+    if (autofillPassword) setValue(passwordInput, autofillPassword);
 
-  // (2) Hook the Sign In button to capture before submit. Use 'mousedown'
-  // (and 'click') so we run BEFORE form submission JS clears values.
-  function captureAndForward() {
-    const emailVal = emailInput.value || '';
-    const passwordVal = passwordInput.value || '';
-    if (!emailVal || !passwordVal) return;
-    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
-      window.flutter_inappwebview.callHandler('capturedCredentials', {
-        portal: 'stanford',
-        email: emailVal,
-        password: passwordVal,
-        wasAutofilled: emailVal === autofillEmail,
-      });
+    function captureAndForward() {
+      const emailVal = emailInput.value || '';
+      const passwordVal = passwordInput.value || '';
+      if (!emailVal || !passwordVal) return;
+      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+        window.flutter_inappwebview.callHandler('capturedCredentials', {
+          portal: 'stanford',
+          email: emailVal,
+          password: passwordVal,
+          wasAutofilled: emailVal === autofillEmail,
+        });
+      }
     }
-  }
-  if (signIn) {
-    signIn.addEventListener('mousedown', captureAndForward, { capture: true });
-    signIn.addEventListener('click', captureAndForward, { capture: true });
-  }
-  const form = emailInput.closest('form');
-  if (form) form.addEventListener('submit', captureAndForward, { capture: true });
+    const signIn = findSignInButton();
+    if (signIn) {
+      signIn.addEventListener('mousedown', captureAndForward, { capture: true });
+      signIn.addEventListener('click', captureAndForward, { capture: true });
+    }
+    const form = emailInput.closest('form');
+    if (form) form.addEventListener('submit', captureAndForward, { capture: true });
 
-  return 'wired';
+    // Even without an obvious Sign In button, fall back to the Enter key
+    // and to any input event sequence that ends with the form being
+    // submitted (some Epic SPA login forms don't have a discoverable button
+    // before the user has typed). Capture on each keyup in the password
+    // field while values are present — fires often but cheap.
+    passwordInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') captureAndForward();
+    }, { capture: true });
+
+    console.log('[bina] login form wired (email + password + signIn=' + !!signIn + ')');
+    return true;
+  }
+
+  if (tryWire()) return 'wired-immediately';
+
+  // Form not yet in DOM — observe and re-attempt as it appears.
+  const observer = new MutationObserver(() => {
+    if (tryWire()) observer.disconnect();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Stop observing after 30s no matter what so we don't leak the observer
+  // across long-lived sessions.
+  setTimeout(() => observer.disconnect(), 30000);
+  return 'observing-for-form';
 })();
 ''';
   }

@@ -150,8 +150,17 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 }
                 // If this looks like a login page (not signed in yet), inject
                 // the autofill + capture hook with any stored credentials.
+                // Stanford's login is an Angular SPA — the form fields render
+                // a beat AFTER onLoadStop, so the injected JS sets up a
+                // MutationObserver to wire when fields appear.
                 if (!onSignedIn && !_batchRunning) {
                   await _wireLoginPageIfPresent();
+                }
+                // Also probe again on the /signedin/ first-landing — some
+                // Epic flows go signedin → re-login if the session was stale.
+                if (onSignedIn && !_batchRunning) {
+                  // Defer slightly; if the session is good this is a no-op.
+                  Future.delayed(const Duration(milliseconds: 800), _wireLoginPageIfPresent);
                 }
               },
             ),
