@@ -34,11 +34,16 @@ class StanfordConfig {
     '$wrapperOrigin/signedin/keepalive.asp',
   ];
 
-  /// Mobile Safari UA — Stanford may serve different HTML/JS to mobile
-  /// vs desktop. Using a real-iPhone-flavored UA from the simulator means
-  /// what we test here matches what an iOS device sees.
+  /// Desktop Safari UA. We intentionally do NOT use a mobile UA: Stanford
+  /// MyHealth detects mobile browsers and serves a "Use the MyHealth app"
+  /// interstitial whose "Continue to the website" button doesn't reliably
+  /// work in an embedded WebView. The whole scrape architecture (wrapper-
+  /// origin after-visit-summary URLs etc.) was designed against Stanford's
+  /// desktop site anyway — the mobile site has a different structure.
+  /// Using desktop Safari UA makes the WebView get the same HTML/JS shape
+  /// we know how to scrape.
   static const String mobileUserAgent =
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) '
-      'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 '
-      'Mobile/15E148 Safari/604.1';
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+      'AppleWebKit/605.1.15 (KHTML, like Gecko) '
+      'Version/17.0 Safari/605.1.15';
 }
