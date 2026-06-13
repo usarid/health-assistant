@@ -21,6 +21,11 @@ dependencies:
   # Documents directory for writing captured note JSONs.
   path_provider: ^2.1.4
 
+  # iOS Keychain / Android EncryptedSharedPreferences wrapper. Used to
+  # persist portal credentials (with user consent) so subsequent logins
+  # autofill instead of requiring the user to retype every time.
+  flutter_secure_storage: ^9.2.2
+
   # Reserved for iteration 3 (POSTing scrapes to the BinaHealth backend).
   http: ^1.2.2
 

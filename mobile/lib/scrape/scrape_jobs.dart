@@ -79,4 +79,98 @@ for (const u of [$urls]) {
 true;
 ''';
   }
+
+  /// Injected on every load that lands on a Stanford login page. Does TWO
+  /// things on a tap of the "Sign In" button:
+  ///   1. If there are stored creds (autofillEmail/autofillPassword passed
+  ///      in), set them into the form fields BEFORE the user sees the page.
+  ///      They tap Sign In themselves.
+  ///   2. When the Sign In button is tapped (whether autofilled or
+  ///      hand-typed), capture the field values and call back to Dart via
+  ///      the 'capturedCredentials' handler. Dart decides whether to ask
+  ///      the user to save them.
+  ///
+  /// Idempotent — re-injecting on a page that already wired up is a no-op.
+  static String loginAutofillAndCapture({
+    String? autofillEmail,
+    String? autofillPassword,
+  }) {
+    final emailJs = autofillEmail == null
+        ? 'null'
+        : "'${autofillEmail.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    final passwordJs = autofillPassword == null
+        ? 'null'
+        : "'${autofillPassword.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    return '''
+(() => {
+  if (window.__binaLoginWired) return 'already-wired';
+  window.__binaLoginWired = true;
+
+  function findEmailInput() {
+    return document.querySelector('input[type="email"]')
+        || document.querySelector('input[autocomplete="username"]')
+        || document.querySelector('input[name*="user" i], input[name*="email" i]')
+        || document.querySelector('input[type="text"]:not([type="search"])');
+  }
+  function findPasswordInput() {
+    return document.querySelector('input[type="password"]');
+  }
+  function findSignInButton() {
+    const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+    return buttons.find(b => /sign\\s*in/i.test(b.textContent || b.value || ''))
+        || document.querySelector('form button[type="submit"]')
+        || document.querySelector('form input[type="submit"]');
+  }
+  function setValue(el, val) {
+    // React/Angular friendly setter — bypass framework's tracking.
+    const proto = el.tagName === 'TEXTAREA'
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+    setter.call(el, val);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  const emailInput = findEmailInput();
+  const passwordInput = findPasswordInput();
+  const signIn = findSignInButton();
+
+  if (!emailInput || !passwordInput) {
+    // Not a login page (or markup changed). Bail without harm.
+    return 'no-login-fields';
+  }
+
+  // (1) Autofill if we have stored creds
+  const autofillEmail = $emailJs;
+  const autofillPassword = $passwordJs;
+  if (autofillEmail) setValue(emailInput, autofillEmail);
+  if (autofillPassword) setValue(passwordInput, autofillPassword);
+
+  // (2) Hook the Sign In button to capture before submit. Use 'mousedown'
+  // (and 'click') so we run BEFORE form submission JS clears values.
+  function captureAndForward() {
+    const emailVal = emailInput.value || '';
+    const passwordVal = passwordInput.value || '';
+    if (!emailVal || !passwordVal) return;
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('capturedCredentials', {
+        portal: 'stanford',
+        email: emailVal,
+        password: passwordVal,
+        wasAutofilled: emailVal === autofillEmail,
+      });
+    }
+  }
+  if (signIn) {
+    signIn.addEventListener('mousedown', captureAndForward, { capture: true });
+    signIn.addEventListener('click', captureAndForward, { capture: true });
+  }
+  const form = emailInput.closest('form');
+  if (form) form.addEventListener('submit', captureAndForward, { capture: true });
+
+  return 'wired';
+})();
+''';
+  }
 }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../scrape/scrape_jobs.dart';
 import '../scrape/stanford_config.dart';
+import '../storage/credentials_store.dart';
 import '../storage/local_writer.dart';
 
 /// Iteration 2 scrape screen.
@@ -71,6 +72,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         title: const Text('BinaHealth'),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: _onMenuSelected,
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'forget-login', child: Text('Forget saved login')),
+            ],
+          ),
+        ],
       ),
       floatingActionButton: _buildFab(),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
@@ -120,6 +129,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                   handlerName: 'saveNote',
                   callback: _onSaveNoteHandler,
                 );
+                c.addJavaScriptHandler(
+                  handlerName: 'capturedCredentials',
+                  callback: _onCapturedCredentialsHandler,
+                );
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
@@ -134,6 +147,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 // Resolve a pending navigation if this is the URL we asked for
                 if (_navCompleter != null && _navCompleter!.isCompleted == false) {
                   _navCompleter!.complete();
+                }
+                // If this looks like a login page (not signed in yet), inject
+                // the autofill + capture hook with any stored credentials.
+                if (!onSignedIn && !_batchRunning) {
+                  await _wireLoginPageIfPresent();
                 }
               },
             ),
@@ -187,6 +205,92 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _scrapeCompleter!.complete(m);
     }
     return {'ok': true};
+  }
+
+  Future<void> _onMenuSelected(String value) async {
+    if (value == 'forget-login') {
+      final exists = await CredentialsStore.has('stanford');
+      if (!exists) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No saved Stanford login on this device.'),
+          duration: Duration(seconds: 3),
+        ));
+        return;
+      }
+      await CredentialsStore.clear('stanford');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Saved Stanford login cleared from this device.'),
+        duration: Duration(seconds: 3),
+      ));
+    }
+  }
+
+  /// Called from injected JS when the Sign In button is tapped. Captures
+  /// the typed-or-autofilled credentials and, IF they're different from
+  /// (or absent in) what we have stored, asks the user to save them.
+  Future<dynamic> _onCapturedCredentialsHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    final portal = (m['portal'] ?? 'stanford').toString();
+    final email = (m['email'] ?? '').toString();
+    final password = (m['password'] ?? '').toString();
+    final wasAutofilled = m['wasAutofilled'] == true;
+    if (email.isEmpty || password.isEmpty) return {'ok': false};
+
+    // Autofilled-and-unchanged → user is signing in with what we already
+    // have. No need to ask again.
+    if (wasAutofilled) {
+      final existing = await CredentialsStore.read(portal);
+      if (existing != null && existing.email == email && existing.password == password) {
+        return {'ok': true, 'action': 'noop'};
+      }
+    }
+
+    // Show consent SnackBar. Don't write anything until the user taps Save.
+    if (!mounted) return {'ok': false};
+    final scaffold = ScaffoldMessenger.of(context);
+    scaffold.hideCurrentSnackBar();
+    scaffold.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 12),
+      content: const Text(
+        'Save this Stanford login on this device? Stored in iOS Keychain, '
+        'never leaves the phone.',
+        style: TextStyle(fontSize: 13),
+      ),
+      action: SnackBarAction(
+        label: 'Save',
+        onPressed: () async {
+          await CredentialsStore.save(portal: portal, email: email, password: password);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Saved. Will autofill next time.'),
+            duration: Duration(seconds: 3),
+          ));
+        },
+      ),
+    ));
+    return {'ok': true};
+  }
+
+  /// Inject the autofill + capture script if the current page looks like
+  /// a login form. The JS itself short-circuits to 'no-login-fields' when
+  /// no inputs are found, so calling it on non-login pages is safe.
+  Future<void> _wireLoginPageIfPresent() async {
+    final ctrl = _ctrl;
+    if (ctrl == null) return;
+    const portal = 'stanford';
+    final cred = await CredentialsStore.read(portal);
+    final js = ScrapeJobs.loginAutofillAndCapture(
+      autofillEmail: cred?.email,
+      autofillPassword: cred?.password,
+    );
+    try {
+      await ctrl.evaluateJavascript(source: js);
+    } catch (_) {
+      // Page may have already navigated by the time JS runs — fine.
+    }
   }
 
   // ── Single test scrape (preserves iteration-1 flow) ────────────────
