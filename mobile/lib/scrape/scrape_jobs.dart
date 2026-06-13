@@ -139,6 +139,12 @@ true;
     el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
+  function emit(name, payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler(name, payload);
+    }
+  }
+
   function tryWire() {
     const emailInput = findEmailInput();
     const passwordInput = findPasswordInput();
@@ -149,37 +155,62 @@ true;
     if (autofillEmail) setValue(emailInput, autofillEmail);
     if (autofillPassword) setValue(passwordInput, autofillPassword);
 
-    function captureAndForward() {
+    const signIn = findSignInButton();
+    const form = emailInput.closest('form');
+    emit('loginDiag', {
+      stage: 'wired',
+      hasEmail: !!emailInput,
+      hasPassword: !!passwordInput,
+      hasSignIn: !!signIn,
+      hasForm: !!form,
+      url: location.href.split('?')[0],
+    });
+
+    function captureAndForward(eventType) {
       const emailVal = emailInput.value || '';
       const passwordVal = passwordInput.value || '';
+      emit('loginDiag', {
+        stage: 'capture-fired',
+        via: eventType,
+        emailLen: emailVal.length,
+        passwordLen: passwordVal.length,
+      });
       if (!emailVal || !passwordVal) return;
-      if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
-        window.flutter_inappwebview.callHandler('capturedCredentials', {
-          portal: 'stanford',
-          email: emailVal,
-          password: passwordVal,
-          wasAutofilled: emailVal === autofillEmail,
-        });
-      }
+      emit('capturedCredentials', {
+        portal: 'stanford',
+        email: emailVal,
+        password: passwordVal,
+        wasAutofilled: emailVal === autofillEmail,
+      });
     }
-    const signIn = findSignInButton();
-    if (signIn) {
-      signIn.addEventListener('mousedown', captureAndForward, { capture: true });
-      signIn.addEventListener('click', captureAndForward, { capture: true });
-    }
-    const form = emailInput.closest('form');
-    if (form) form.addEventListener('submit', captureAndForward, { capture: true });
 
-    // Even without an obvious Sign In button, fall back to the Enter key
-    // and to any input event sequence that ends with the form being
-    // submitted (some Epic SPA login forms don't have a discoverable button
-    // before the user has typed). Capture on each keyup in the password
-    // field while values are present — fires often but cheap.
+    // Broad-net event listeners — multiple paths to the same handler so
+    // whichever Stanford uses to actually submit, we catch it.
+    if (signIn) {
+      signIn.addEventListener('mousedown', () => captureAndForward('signin-mousedown'), { capture: true });
+      signIn.addEventListener('click', () => captureAndForward('signin-click'), { capture: true });
+      signIn.addEventListener('touchstart', () => captureAndForward('signin-touchstart'), { capture: true });
+    }
+    if (form) {
+      form.addEventListener('submit', () => captureAndForward('form-submit'), { capture: true });
+    }
     passwordInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') captureAndForward();
+      if (e.key === 'Enter') captureAndForward('password-enter');
+    }, { capture: true });
+    // Document-level fallback: any click that happens while both fields
+    // have content. Fires more than once in some flows; capturedCredentials
+    // handler on Dart side dedups against currently-stored value.
+    document.addEventListener('click', (e) => {
+      if (!emailInput.value || !passwordInput.value) return;
+      // Only fire for clicks on elements that look like submit/login affordances
+      const target = e.target;
+      const text = (target.textContent || target.value || '').trim();
+      if (/sign\\s*in|continue|log\\s*in|submit/i.test(text)) {
+        captureAndForward('document-click:' + text.slice(0, 20));
+      }
     }, { capture: true });
 
-    console.log('[bina] login form wired (email + password + signIn=' + !!signIn + ')');
+    console.log('[bina] login form wired (email + password + signIn=' + !!signIn + ' form=' + !!form + ')');
     return true;
   }
 

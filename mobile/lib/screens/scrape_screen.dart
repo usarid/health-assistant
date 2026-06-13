@@ -133,6 +133,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                   handlerName: 'capturedCredentials',
                   callback: _onCapturedCredentialsHandler,
                 );
+                c.addJavaScriptHandler(
+                  handlerName: 'loginDiag',
+                  callback: _onLoginDiagHandler,
+                );
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
@@ -213,6 +217,29 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     if (_scrapeCompleter != null && !_scrapeCompleter!.isCompleted) {
       _scrapeCompleter!.complete(m);
     }
+    return {'ok': true};
+  }
+
+  /// Dev/diagnostic handler — surfaces login-wiring telemetry into the
+  /// status bar so we can see whether the JS injection wired up and what
+  /// triggered any capture attempts. Quiet in production once we trust
+  /// the flow; right now it's how we figure out why the SnackBar isn't
+  /// firing.
+  Future<dynamic> _onLoginDiagHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    final stage = m['stage']?.toString() ?? '?';
+    String summary;
+    if (stage == 'wired') {
+      summary = 'login wiring: email=${m["hasEmail"]} pw=${m["hasPassword"]} '
+          'signIn=${m["hasSignIn"]} form=${m["hasForm"]}';
+    } else if (stage == 'capture-fired') {
+      summary = 'capture-fired via ${m["via"]} (email len=${m["emailLen"]} '
+          'pw len=${m["passwordLen"]})';
+    } else {
+      summary = 'login: $m';
+    }
+    if (mounted) setState(() => _status = summary);
     return {'ok': true};
   }
 
