@@ -73,7 +73,34 @@ class ScrapeJobs {
     return [];
   }
 
-  if (!clickClinicalNotesTab()) {
+  // Wait for the Clinical Notes tab to mount before clicking it. The
+  // Stanford SPA can take 2-5s on heavily-loaded pages (especially hospital
+  // stays with many notes) — a one-shot check right after settle was
+  // failing intermittently with 'no-notes-tab' on visits we'd successfully
+  // captured before. Also bail fast if "No Notes Available" is already on
+  // the page (means the visit has no notes — no tab to click).
+  async function waitAndClickClinicalNotesTab(timeoutMs) {
+    const t = Date.now();
+    while (Date.now() - t < timeoutMs) {
+      if (/no\\s+notes\\s+available/i.test(document.body?.textContent || '')) {
+        return { result: 'empty', elapsedMs: Date.now() - t };
+      }
+      if (clickClinicalNotesTab()) {
+        return { result: 'clicked', elapsedMs: Date.now() - t };
+      }
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return { result: 'no-tab', elapsedMs: Date.now() - t };
+  }
+
+  const tw = await waitAndClickClinicalNotesTab(5000);
+  diag('tab-wait', tw);
+  const tabResult = tw.result;
+  if (tabResult === 'empty') {
+    send({ csn, html: '', error: 'no-notes-available' });
+    return;
+  }
+  if (tabResult === 'no-tab') {
     send({ csn, html: '', error: 'no-notes-tab' });
     return;
   }
