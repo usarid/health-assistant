@@ -650,8 +650,17 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final url = StanfordConfig.visitDetailUrlPattern
         .replaceAll('%CSN%', Uri.encodeComponent(csn));
 
-    const settleSeconds = 4;
-    const pollMs = 15000;
+    // Settle was 4s historically (worked but conservative). The JS itself
+    // polls for either VIEW NOTE buttons or .pgSection content, so 2s is
+    // enough lead for the SPA to mount the Clinical Notes tab before we
+    // inject. Saves ~2s on every visit (~200s across a 100-visit run).
+    const settleSeconds = 2;
+    // Mode-detection poll inside JS: was 15s. Successful visits resolve
+    // in <2s; the only thing 15s bought was waiting on truly-empty pages
+    // to finally confirm there's no content. 5s is plenty — if neither
+    // buttons nor inline text show up by then, the page is empty. Saves
+    // ~10s on each mode-timeout visit.
+    const pollMs = 5000;
 
     _navCompleter = Completer<void>();
     try {
