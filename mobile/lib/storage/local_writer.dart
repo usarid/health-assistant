@@ -116,13 +116,21 @@ class LocalWriter {
 
   static Future<void> _diagWriteChain = Future.value();
 
-  /// Read the most recent consolidated batch file from the docs directory
-  /// and return the CSNs that errored in it. Empty list if there's no
-  /// prior batch or if the prior batch had zero errors.
+  /// Aggregate "incomplete" CSNs across ALL consolidated batch files in the
+  /// docs directory — the union of:
+  ///   - CSNs that errored in any batch and have never since been captured
+  ///   - CSNs captured as multi-note with at least one sub-note still empty
+  ///     (the old 1500-char threshold rejected short notes; the new code
+  ///     captures them, so these CSNs are worth re-running)
   ///
-  /// Used by the "Retry failed visits" affordance — feeds those CSNs back
-  /// into the scrape loop as a small reverification batch.
-  static Future<List<String>> findFailedCsnsInLastBatch() async {
+  /// Excludes:
+  ///   - CSNs cleanly captured (single-note with html, or multi-note with
+  ///     every sub-note having content) — done, no need to retry
+  ///   - CSNs that have never appeared in any batch — never attempted on
+  ///     purpose; not "failed", so not retried
+  ///
+  /// Used by the "Retry failed visits" menu action.
+  static Future<List<String>> findIncompleteCsns() async {
     final dir = await getApplicationDocumentsDirectory();
     final entries = await Directory(dir.path).list().toList();
     final batches = entries
@@ -131,18 +139,78 @@ class LocalWriter {
             f.path.contains('stanford-batch-2') &&
             !f.path.contains('manifest'))
         .toList()
-      ..sort((a, b) => b.path.compareTo(a.path));
-    if (batches.isEmpty) return const [];
-    final raw = await batches.first.readAsString();
-    final m = jsonDecode(raw);
-    if (m is! Map) return const [];
-    final errors = m['errors'];
-    if (errors is! List) return const [];
-    final out = <String>[];
-    for (final e in errors) {
-      if (e is Map && e['csn'] is String) out.add(e['csn'] as String);
+      ..sort((a, b) => a.path.compareTo(b.path)); // oldest → newest
+
+    // Track the BEST state we've seen for each CSN across all batches:
+    // 'errored' < 'partial' < 'complete' (higher wins).
+    final state = <String, String>{};
+    int rank(String s) => switch (s) { 'complete' => 3, 'partial' => 2, 'errored' => 1, _ => 0 };
+    void upgrade(String csn, String to) {
+      final cur = state[csn];
+      if (cur == null || rank(to) > rank(cur)) state[csn] = to;
     }
-    return out;
+
+    for (final file in batches) {
+      try {
+        final raw = await file.readAsString();
+        final m = jsonDecode(raw);
+        if (m is! Map) continue;
+
+        final cap = m['captured'];
+        if (cap is List) {
+          for (final c in cap) {
+            if (c is! Map) continue;
+            final csn = c['csn'];
+            if (csn is! String) continue;
+            final notes = c['notes'];
+            if (notes is List) {
+              // multi-note: complete only if every sub-note has content
+              bool anyEmpty = false;
+              bool anyContent = false;
+              for (final n in notes) {
+                if (n is Map) {
+                  final len = (n['htmlLength'] is int) ? n['htmlLength'] as int : 0;
+                  if (len > 0) {
+                    anyContent = true;
+                  } else {
+                    anyEmpty = true;
+                  }
+                }
+              }
+              if (!anyContent) {
+                upgrade(csn, 'errored');
+              } else if (anyEmpty) {
+                upgrade(csn, 'partial');
+              } else {
+                upgrade(csn, 'complete');
+              }
+            } else {
+              final html = c['html'];
+              if (html is String && html.isNotEmpty) {
+                upgrade(csn, 'complete');
+              } else {
+                upgrade(csn, 'errored');
+              }
+            }
+          }
+        }
+
+        final errs = m['errors'];
+        if (errs is List) {
+          for (final e in errs) {
+            if (e is! Map) continue;
+            final csn = e['csn'];
+            if (csn is String) upgrade(csn, 'errored');
+          }
+        }
+      } catch (_) {}
+    }
+
+    return state.entries
+        .where((e) => e.value != 'complete')
+        .map((e) => e.key)
+        .toList()
+      ..sort();
   }
 
   static String _csnSlug(String csn) {

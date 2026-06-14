@@ -361,18 +361,21 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         duration: const Duration(seconds: 2),
       ));
     } else if (value == 'retry-failures') {
-      final failed = await LocalWriter.findFailedCsnsInLastBatch();
+      // Aggregates failed + partially-captured CSNs across ALL prior
+      // batches — so retry catches both never-worked visits AND multi-note
+      // visits that captured some sub-notes but missed others.
+      final failed = await LocalWriter.findIncompleteCsns();
       if (!mounted) return;
       if (failed.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No failed visits in the most recent batch — '
+          content: Text('No incomplete visits across prior batches — '
               'run "Scrape all" first.'),
           duration: Duration(seconds: 3),
         ));
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Retrying ${failed.length} failed visits…'),
+        content: Text('Retrying ${failed.length} incomplete visits…'),
         duration: const Duration(seconds: 3),
       ));
       await _scrapeAll(overrideCsns: failed);
