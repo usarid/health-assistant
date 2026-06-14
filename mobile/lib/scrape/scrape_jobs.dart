@@ -320,6 +320,126 @@ class ScrapeJobs {
   ///      the 'capturedCredentials' handler. Dart decides whether to ask
   ///      the user to save them.
   ///
+  /// Scrape one page of the Stanford messages folder (inbox or outbox).
+  /// Caller must have navigated the WebView to /signedin/messages/<folder>
+  /// (optionally with a page param) before injecting this.
+  ///
+  /// Stanford's message lists are rendered as tables of rows; each row
+  /// contains an `<a>` linking to /signedin/messages/detail/<folder>/<id>
+  /// — that link gives us the stable Epic message ID and (via its text)
+  /// the subject. Surrounding row cells carry the other-party display
+  /// name and the received/sent timestamp.
+  ///
+  /// Returns via the 'messageList' handler:
+  ///   { url, folder, rows: [{id, subject, otherParty, date, isUnread, isReply}],
+  ///     pagination: {hasNext, nextHref?}, error? }
+  ///
+  /// Robust to either `<tr>` table rows or `<li>` list rows — selectors
+  /// fall back across both. Polls for up to 8s for rows to appear (Epic
+  /// SPA mount latency).
+  static String stanfordMessageList() {
+    return '''
+(async () => {
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('messageList', payload);
+    }
+  }
+
+  function findRows() {
+    const links = Array.from(document.querySelectorAll(
+      'a[href*="/signedin/messages/detail/"]'));
+    const rows = [];
+    for (const a of links) {
+      const m = a.href.match(/\\/messages\\/detail\\/(inbox|outbox)\\/(\\d+)/);
+      if (!m) continue;
+      const folder = m[1];
+      const id = m[2];
+      const subject = (a.textContent || '').trim();
+
+      // Find the enclosing row, prefer tr/li, fallback to any ancestor
+      // whose immediate children look like cells.
+      let row = a.closest('tr') || a.closest('li');
+      if (!row) {
+        let p = a.parentElement;
+        while (p && p !== document.body) {
+          const kids = p.children;
+          if (kids.length >= 3 && kids.length <= 8) { row = p; break; }
+          p = p.parentElement;
+        }
+      }
+      let otherParty = '', date = '';
+      if (row) {
+        // Tables: row.children are <td>s. Lists: row.children are <span>/<div>s.
+        // We assume the link's containing cell is the subject; the next
+        // two non-empty cells are the other-party + date.
+        const cells = Array.from(row.children).filter(
+          c => (c.textContent || '').trim().length > 0);
+        const linkCell = a.closest('td') || a.closest('li > *') || a.parentElement;
+        const linkIdx = cells.indexOf(linkCell);
+        const after = linkIdx >= 0 ? cells.slice(linkIdx + 1) : cells.slice(1);
+        if (after[0]) otherParty = (after[0].textContent || '').trim();
+        if (after[1]) date = (after[1].textContent || '').trim();
+      }
+      // Unread detection: Stanford bolds unread subjects; check inline style
+      // or class names or the subject's font-weight.
+      const isUnread =
+        /unread/i.test((row?.className || '') + ' ' + (a.className || '')) ||
+        parseInt(window.getComputedStyle(a).fontWeight) >= 600;
+      const isReply = /^re\\b/i.test(subject);
+
+      rows.push({ folder, id, subject, otherParty, date, isUnread, isReply });
+    }
+    // De-dup by id (sometimes Stanford renders a link twice — e.g. icon + text)
+    const seen = new Set();
+    return rows.filter(r => {
+      const key = r.folder + ':' + r.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  // Wait up to 8s for SPA to mount the list
+  const t0 = Date.now();
+  let rows = [];
+  while (Date.now() - t0 < 8000) {
+    rows = findRows();
+    if (rows.length > 0) break;
+    await new Promise(r => setTimeout(r, 400));
+  }
+
+  const folderMatch = location.pathname.match(/\\/messages\\/(inbox|outbox)/);
+  const folder = folderMatch ? folderMatch[1] : 'unknown';
+
+  // Pagination detection: look for a "Next" affordance. Epic typically
+  // uses either a numbered pager or a Next link/button. We capture both
+  // the existence and (if present) the href so the caller can navigate.
+  function findNext() {
+    const cands = Array.from(document.querySelectorAll(
+      'a, button, [role="button"]'));
+    for (const el of cands) {
+      const txt = (el.textContent || '').trim();
+      if (!/^next\\b/i.test(txt)) continue;
+      if (el.disabled || /disabled/i.test(el.className || '')) continue;
+      const href = (el.tagName === 'A' && el.href) ? el.href : null;
+      return { hasNext: true, nextHref: href };
+    }
+    return { hasNext: false };
+  }
+
+  emit({
+    url: location.href,
+    folder,
+    rowCount: rows.length,
+    rows,
+    pagination: findNext(),
+    error: rows.length === 0 ? 'no-rows-found' : null,
+  });
+})();
+''';
+  }
+
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,

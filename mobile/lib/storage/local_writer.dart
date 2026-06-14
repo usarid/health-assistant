@@ -91,6 +91,34 @@ class LocalWriter {
     return file.path;
   }
 
+  /// Write a messages-discovery dump: the full list of message rows we
+  /// found across both folders (inbox + outbox) on a single discovery
+  /// pass. One file per discovery run, timestamped. Caller pre-aggregates
+  /// rows from all paginated pages of both folders into the [rows] list.
+  ///
+  /// This is the input for Phase 3-2 (per-message body fetch): we walk
+  /// these IDs and capture the body from each detail page.
+  static Future<String> writeMessagesDiscovery({
+    required DateTime startedAt,
+    required DateTime finishedAt,
+    required List<Map<String, dynamic>> rows,
+    required Map<String, dynamic> meta,
+  }) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
+    final file = File('${dir.path}/stanford-messages-discovery-$ts.json');
+    final payload = {
+      'portal': 'stanford',
+      'startedAt': startedAt.toUtc().toIso8601String(),
+      'finishedAt': finishedAt.toUtc().toIso8601String(),
+      'rowCount': rows.length,
+      'meta': meta,
+      'rows': rows,
+    };
+    await file.writeAsString(jsonEncode(payload));
+    return file.path;
+  }
+
   /// Append one diag event to the current batch's diag JSONL file. Each
   /// line is a self-contained JSON object — easy to grep/parse later.
   /// Metadata only (URL paths, lengths, counts); never note text or labels.

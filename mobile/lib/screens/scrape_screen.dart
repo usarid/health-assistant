@@ -47,6 +47,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // Completers that bridge JS lifecycle events into Dart's async/await
   Completer<void>? _navCompleter;
   Completer<Map<String, dynamic>>? _scrapeCompleter;
+  Completer<Map<String, dynamic>>? _messageListCompleter;
 
   // Batch state
   int _batchTotal = 0;
@@ -87,6 +88,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 child: Text(_showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'),
               ),
               const PopupMenuItem(value: 'retry-failures', child: Text('Retry failed visits')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (Stanford)')),
             ],
           ),
         ],
@@ -161,6 +164,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 c.addJavaScriptHandler(
                   handlerName: 'noteDiag',
                   callback: _onNoteDiagHandler,
+                );
+                c.addJavaScriptHandler(
+                  handlerName: 'messageList',
+                  callback: _onMessageListHandler,
                 );
               },
               onLoadStop: (c, url) async {
@@ -251,6 +258,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       if (realErrors > 0) 'errors $realErrors',
     ];
     return parts.join(' • ');
+  }
+
+  /// JS handler for one scraped message-list page (inbox or outbox).
+  /// Completes [_messageListCompleter] with the payload so the discovery
+  /// loop can collect rows and decide pagination.
+  Future<dynamic> _onMessageListHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_messageListCompleter != null && !_messageListCompleter!.isCompleted) {
+      _messageListCompleter!.complete(m);
+    }
+    return {'ok': true};
   }
 
   // ── Handler the WebView calls back into ────────────────────────────
@@ -368,6 +387,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
             : 'Diagnostics off.'),
         duration: const Duration(seconds: 2),
       ));
+    } else if (value == 'discover-messages') {
+      await _discoverMessages();
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
@@ -702,6 +723,120 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     // hospital-stay visit; covers everything we've seen in v3 visits.
     try {
       return await _scrapeCompleter!.future.timeout(const Duration(minutes: 3));
+    } on TimeoutException {
+      return {'error': 'scrape-timeout'};
+    }
+  }
+
+  // ── Messages: discovery pass (Phase 3-1) ───────────────────────────
+  /// Walk inbox + outbox folder pages, collect every message's
+  /// {id, subject, otherParty, date, isUnread, isReply}, and persist to
+  /// a discovery JSON file. No body fetching yet — that's Phase 3-2.
+  ///
+  /// Pagination: try `?page=N` URL pattern first; if that yields the same
+  /// rows or fewer than the prior page, stop. (Confirms the param works
+  /// without needing to detect Stanford's exact pager UI upfront.)
+  Future<void> _discoverMessages() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _status = 'Discovering Stanford messages — inbox first…';
+    });
+    final startedAt = DateTime.now();
+    final allRows = <Map<String, dynamic>>[];
+    final meta = <String, dynamic>{
+      'inboxPages': 0,
+      'outboxPages': 0,
+      'inboxRowCount': 0,
+      'outboxRowCount': 0,
+      'errors': <String>[],
+    };
+
+    try {
+      for (final folder in const ['inbox', 'outbox']) {
+        final baseUrl = folder == 'inbox'
+            ? StanfordConfig.messageInboxUrl
+            : StanfordConfig.messageOutboxUrl;
+        final seenIds = <String>{};
+        int page = 1;
+        int newRowsThisPage = -1;
+        while (newRowsThisPage != 0 && page <= 80 && !_abortRequested) {
+          final url = page == 1 ? baseUrl : '$baseUrl?page=$page';
+          setState(() => _status =
+              'Discovering $folder page $page (collected ${allRows.length})…');
+          final res = await _scrapeMessageListPage(url);
+          if (res == null) {
+            meta['errors'].add('$folder p$page nav-failed');
+            break;
+          }
+          final err = res['error']?.toString();
+          if (err != null && err.isNotEmpty && page == 1) {
+            // No rows on page 1 with no nav error — folder empty
+            meta['errors'].add('$folder p1: $err');
+            break;
+          }
+          final rows = (res['rows'] as List?) ?? const [];
+          newRowsThisPage = 0;
+          for (final r in rows) {
+            if (r is! Map) continue;
+            final id = r['id']?.toString();
+            if (id == null) continue;
+            final key = '$folder:$id';
+            if (seenIds.contains(key)) continue;
+            seenIds.add(key);
+            allRows.add(Map<String, dynamic>.from(r));
+            newRowsThisPage += 1;
+          }
+          meta['${folder}Pages'] = page;
+          meta['${folder}RowCount'] = seenIds.length;
+          if (newRowsThisPage == 0) break;
+          page += 1;
+        }
+      }
+
+      final finishedAt = DateTime.now();
+      final path = await LocalWriter.writeMessagesDiscovery(
+        startedAt: startedAt,
+        finishedAt: finishedAt,
+        rows: allRows,
+        meta: meta,
+      );
+      final dur = finishedAt.difference(startedAt);
+      setState(() => _status =
+          'Discovery done in ${dur.inSeconds}s — ${allRows.length} rows '
+          '(${meta['inboxRowCount']} inbox, ${meta['outboxRowCount']} outbox) → $path');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// Load one message-list URL, inject the list scraper, await the result.
+  Future<Map<String, dynamic>?> _scrapeMessageListPage(String url) async {
+    _navCompleter = Completer<void>();
+    try {
+      await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+    } catch (_) {
+      return null;
+    }
+    try {
+      await _navCompleter!.future.timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      return {'error': 'nav-timeout'};
+    }
+    // Brief settle for the SPA — the JS itself polls for up to 8s for
+    // rows to render, so a short Dart-side delay here is enough.
+    await Future.delayed(const Duration(seconds: 2));
+    _messageListCompleter = Completer<Map<String, dynamic>>();
+    try {
+      await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordMessageList());
+    } catch (e) {
+      return {'error': 'inject-failed: $e'};
+    }
+    try {
+      return await _messageListCompleter!.future
+          .timeout(const Duration(seconds: 15));
     } on TimeoutException {
       return {'error': 'scrape-timeout'};
     }

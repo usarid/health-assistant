@@ -15,6 +15,13 @@ class StanfordConfig {
   static const String visitDetailUrlPattern =
       '$wrapperOrigin/signedin/appointments/after-visit-summary/csn=%CSN%&encType=3';
 
+  /// Messaging URLs. Both folder pages render Epic-style paginated message
+  /// lists; row links target /signedin/messages/detail/<folder>/<msgId>.
+  static const String messageInboxUrl  = '$wrapperOrigin/signedin/messages/inbox';
+  static const String messageOutboxUrl = '$wrapperOrigin/signedin/messages/outbox';
+  static const String messageDetailUrlPattern =
+      '$wrapperOrigin/signedin/messages/detail/%FOLDER%/%MSG_ID%';
+
   /// Login landing page; opens here on app launch.
   static const String loginUrl = '$wrapperOrigin/#/';
 
