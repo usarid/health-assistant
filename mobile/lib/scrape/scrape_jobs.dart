@@ -134,6 +134,34 @@ class ScrapeJobs {
       return seenCaptures.some(c => c.len === html.length && c.head === head);
     }
 
+    // One click cycle: scroll into view, click, poll for new content.
+    // Returns { html, finalSectionLen, sectionChanged, pollMs } where html
+    // is '' if nothing new appeared within 5s.
+    async function clickAndPoll(btn, beforeText) {
+      btn.scrollIntoView({ block: 'center', behavior: 'instant' });
+      await new Promise(r => setTimeout(r, 200));
+      btn.click();
+
+      // 100 char floor accepts brief notes (refill stubs, declined-vaccine
+      // entries); diag showed successful captures resolve in 400-810ms.
+      let html = '';
+      let finalSectionLen = 0;
+      let sectionChanged = false;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 5000) {
+        await new Promise(r => setTimeout(r, 400));
+        const section = document.querySelector('.pgSection');
+        const text = section?.textContent || '';
+        finalSectionLen = text.length;
+        if (text !== beforeText) sectionChanged = true;
+        if (section && text.length > 100 && text !== beforeText) {
+          html = section.outerHTML;
+          break;
+        }
+      }
+      return { html, finalSectionLen, sectionChanged, pollMs: Date.now() - t0 };
+    }
+
     for (let i = 0; i < initialButtonCount; i++) {
       const btns = await ensureListView();
       diag('iter-start', { i, btnsAvailable: btns.length });
@@ -160,42 +188,43 @@ class ScrapeJobs {
         sectionLen: beforeText.length,
         labelLen: label.length,
       });
-      btn.click();
 
-      // Wait for the per-note body to render. After a back-link click the
-      // section is reset to empty, so any non-empty .pgSection that's
-      // grown past a small floor (100 chars — long enough to filter out
-      // loading-state placeholders, short enough to accept brief notes
-      // like refill stubs, declined-vaccine entries, etc.) is a real note.
-      // Diag showed successful captures resolve in 400-810ms; cap the
-      // poll at 5s instead of 15s so failed iterations don't bleed the
-      // session timeout budget.
-      let html = '';
-      let finalSectionLen = 0;
-      let sectionChanged = false;
-      const t0 = Date.now();
-      while (Date.now() - t0 < 5000) {
-        await new Promise(r => setTimeout(r, 400));
-        const section = document.querySelector('.pgSection');
-        const text = section?.textContent || '';
-        finalSectionLen = text.length;
-        if (text !== beforeText) sectionChanged = true;
-        if (section && text.length > 100 && text !== beforeText) {
-          html = section.outerHTML;
-          break;
-        }
+      // First attempt
+      let r = await clickAndPoll(btn, beforeText);
+      let html = r.html;
+      let duplicate = isDuplicate(html);
+      let attempts = 1;
+
+      // Stanford occasionally serves the sibling note's content when we
+      // click a different button immediately after a successful capture
+      // (proven via user-confirmed screenshots: the "missing" notes DO
+      // have real content in MyHealth). The click appears to coalesce
+      // with the previous one. Retry with a longer cool-off + a fresh
+      // re-find of the button (DOM may have re-rendered).
+      while (duplicate && attempts < 3) {
+        diag('dedup-retry', { i, attempt: attempts, prevLen: html.length });
+        await new Promise(r2 => setTimeout(r2, 1500));
+        const freshBtns = await ensureListView();
+        if (i >= freshBtns.length) break;
+        const freshBtn = freshBtns[i];
+        // Re-fetch beforeText too — back-nav may have reset .pgSection
+        const bt = document.querySelector('.pgSection')?.textContent || '';
+        r = await clickAndPoll(freshBtn, bt);
+        html = r.html;
+        duplicate = isDuplicate(html);
+        attempts += 1;
       }
 
-      const duplicate = isDuplicate(html);
       diag('post-click', {
         i,
         urlPath: urlPathOnly(location.href),
         urlChanged: location.href !== beforeUrl,
-        sectionLen: finalSectionLen,
-        sectionChanged,
+        sectionLen: r.finalSectionLen,
+        sectionChanged: r.sectionChanged,
         capturedLen: html.length,
         duplicate,
-        pollMs: Date.now() - t0,
+        attempts,
+        pollMs: r.pollMs,
       });
 
       if (html && !duplicate) {
