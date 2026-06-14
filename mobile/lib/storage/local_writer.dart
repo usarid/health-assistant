@@ -142,9 +142,17 @@ class LocalWriter {
       ..sort((a, b) => a.path.compareTo(b.path)); // oldest → newest
 
     // Track the BEST state we've seen for each CSN across all batches:
-    // 'errored' < 'partial' < 'complete' (higher wins).
+    // 'errored' < 'empty' < 'partial' < 'complete' (higher wins).
+    // 'empty' = Stanford's portal explicitly said "No Notes Available" —
+    // a definitive answer that beats 'errored' (which might be transient).
     final state = <String, String>{};
-    int rank(String s) => switch (s) { 'complete' => 3, 'partial' => 2, 'errored' => 1, _ => 0 };
+    int rank(String s) => switch (s) {
+      'complete' => 4,
+      'partial' => 3,
+      'empty' => 2,
+      'errored' => 1,
+      _ => 0,
+    };
     void upgrade(String csn, String to) {
       final cur = state[csn];
       if (cur == null || rank(to) > rank(cur)) state[csn] = to;
@@ -200,14 +208,22 @@ class LocalWriter {
           for (final e in errs) {
             if (e is! Map) continue;
             final csn = e['csn'];
-            if (csn is String) upgrade(csn, 'errored');
+            final reason = e['reason'];
+            if (csn is! String) continue;
+            // Stanford's portal-confirmed "No Notes Available" reading is
+            // definitive — don't keep retrying these visits.
+            if (reason == 'no-notes-available') {
+              upgrade(csn, 'empty');
+            } else {
+              upgrade(csn, 'errored');
+            }
           }
         }
       } catch (_) {}
     }
 
     return state.entries
-        .where((e) => e.value != 'complete')
+        .where((e) => e.value != 'complete' && e.value != 'empty')
         .map((e) => e.key)
         .toList()
       ..sort();

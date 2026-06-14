@@ -78,20 +78,32 @@ class ScrapeJobs {
     return;
   }
 
-  // Race window: poll for either (a) VIEW NOTE buttons → list view, or
-  // (b) .pgSection grows past 200 chars → inline note rendered. Check
-  // buttons FIRST each tick — on a multi-note visit, .pgSection may have
-  // the list text >200 chars even when buttons are the right path.
+  // Race window: poll for one of:
+  //   (a) VIEW NOTE buttons → list view
+  //   (b) .pgSection text contains Stanford's "No Notes Available" string
+  //       → empty visit (no care-team notes shareable for this encounter)
+  //   (c) .pgSection grows past 200 chars → inline note rendered
+  // Check buttons FIRST each tick — on a multi-note visit, .pgSection may
+  // have the list text >200 chars even when buttons are the right path.
+  // 'empty' check is next so we don't misclassify a short "No Notes
+  // Available" panel as a tiny inline note.
   const startedAt = Date.now();
   let mode = null;
   while (Date.now() - startedAt < $pollMs) {
     await new Promise(r => setTimeout(r, 400));
     if (findViewNoteButtons().length > 0) { mode = 'list'; break; }
     const section = document.querySelector('.pgSection');
-    if (section && section.textContent.length > 200) { mode = 'inline'; break; }
+    const sectionText = section?.textContent || '';
+    if (/no\\s+notes\\s+available/i.test(sectionText)) { mode = 'empty'; break; }
+    if (section && sectionText.length > 200) { mode = 'inline'; break; }
   }
 
   diag('mode-detected', { mode: mode || 'timeout', elapsedMs: Date.now() - startedAt });
+
+  if (mode === 'empty') {
+    send({ csn, html: '', error: 'no-notes-available' });
+    return;
+  }
 
   if (mode === 'inline') {
     send({ csn, html: document.querySelector('.pgSection').outerHTML });
