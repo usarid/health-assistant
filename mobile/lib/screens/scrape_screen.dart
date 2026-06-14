@@ -773,8 +773,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           }
           final err = res['error']?.toString();
           if (err != null && err.isNotEmpty && page == 1) {
-            // No rows on page 1 with no nav error — folder empty
+            // No rows on page 1 — save the diagnostics block so we can
+            // see what selectors to fix.
             meta['errors'].add('$folder p1: $err');
+            if (res['diagnostics'] != null) {
+              meta['${folder}Diagnostics'] = res['diagnostics'];
+            }
             break;
           }
           final rows = (res['rows'] as List?) ?? const [];

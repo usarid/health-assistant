@@ -347,8 +347,11 @@ class ScrapeJobs {
   }
 
   function findRows() {
+    // Lenient selector: matches both absolute (/signedin/messages/detail/...)
+    // and relative (/messages/detail/...) href attributes. a.href getter
+    // always returns the absolute URL, which we then regex.
     const links = Array.from(document.querySelectorAll(
-      'a[href*="/signedin/messages/detail/"]'));
+      'a[href*="messages/detail/"]'));
     const rows = [];
     for (const a of links) {
       const m = a.href.match(/\\/messages\\/detail\\/(inbox|outbox)\\/(\\d+)/);
@@ -428,6 +431,51 @@ class ScrapeJobs {
     return { hasNext: false };
   }
 
+  // If we found nothing, dump structural diagnostics so the host can
+  // figure out which selectors to use. PHI-safe: anchor hrefs hold IDs
+  // only, no message bodies; class/tag names are structure not content.
+  let diagnostics = null;
+  if (rows.length === 0) {
+    const allAnchors = Array.from(document.querySelectorAll('a'));
+    const hrefAttrs = allAnchors
+      .map(a => a.getAttribute('href') || '')
+      .filter(h => h && h !== '#' && !h.startsWith('javascript:'));
+    diagnostics = {
+      anchorCount: allAnchors.length,
+      tableCount: document.querySelectorAll('table').length,
+      // hrefs containing message-y substrings — likely candidates for
+      // detail-page links if our selector missed
+      messageyHrefs: hrefAttrs
+        .filter(h => /messag|msg|detail/i.test(h))
+        .slice(0, 12),
+      // generic href sample to see what routing style the page uses
+      otherHrefSample: hrefAttrs.slice(0, 15),
+      // Some Epic builds wire clicks via JS, not anchors — look for those
+      clickableRowSamples: Array.from(document.querySelectorAll(
+        'tr[onclick], li[onclick], [data-msg-id], [data-message-id], [data-id]'))
+        .slice(0, 5)
+        .map(el => ({
+          tag: el.tagName,
+          classes: (el.className || '').slice(0, 80),
+          onclick: (el.getAttribute('onclick') || '').slice(0, 200),
+          dataMsgId: el.getAttribute('data-msg-id')
+            || el.getAttribute('data-message-id')
+            || el.getAttribute('data-id'),
+        })),
+      // Top-level structural classes — first 8 elements with a class on
+      // the visible page area
+      structureSample: Array.from(document.querySelectorAll(
+        'main *[class], body > div *[class]'))
+        .filter(el => el.children.length > 0)
+        .slice(0, 8)
+        .map(el => ({
+          tag: el.tagName,
+          classes: (el.className || '').slice(0, 80),
+          childCount: el.children.length,
+        })),
+    };
+  }
+
   emit({
     url: location.href,
     folder,
@@ -435,6 +483,7 @@ class ScrapeJobs {
     rows,
     pagination: findNext(),
     error: rows.length === 0 ? 'no-rows-found' : null,
+    diagnostics,
   });
 })();
 ''';
