@@ -96,14 +96,25 @@ class LocalWriter {
   /// Metadata only (URL paths, lengths, counts); never note text or labels.
   /// File path includes the batch start timestamp so consecutive runs don't
   /// clobber each other.
-  static Future<void> appendDiagLine(DateTime batchStartedAt, Map<String, dynamic> event) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final ts = batchStartedAt.toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-diag-$ts.jsonl');
+  ///
+  /// Writes are serialized through [_diagWriteChain] — fire-and-forget
+  /// callers from the JS handler bridge can race otherwise (proven by a
+  /// 33% line-corruption rate when this used naked writeAsString+
+  /// FileMode.append).
+  static Future<void> appendDiagLine(DateTime batchStartedAt, Map<String, dynamic> event) {
     final stamped = Map<String, dynamic>.from(event);
     stamped['at'] = DateTime.now().toUtc().toIso8601String();
-    await file.writeAsString('${jsonEncode(stamped)}\n', mode: FileMode.append, flush: false);
+    final line = '${jsonEncode(stamped)}\n';
+    _diagWriteChain = _diagWriteChain.then((_) async {
+      final dir = await getApplicationDocumentsDirectory();
+      final ts = batchStartedAt.toUtc().toIso8601String().replaceAll(':', '-');
+      final file = File('${dir.path}/stanford-diag-$ts.jsonl');
+      await file.writeAsString(line, mode: FileMode.append, flush: true);
+    });
+    return _diagWriteChain;
   }
+
+  static Future<void> _diagWriteChain = Future.value();
 
   /// Read the most recent consolidated batch file from the docs directory
   /// and return the CSNs that errored in it. Empty list if there's no

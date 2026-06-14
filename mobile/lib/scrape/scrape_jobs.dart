@@ -102,6 +102,17 @@ class ScrapeJobs {
     const initialButtonCount = findViewNoteButtons().length;
     diag('list-entered', { buttonCount: initialButtonCount });
     const notes = [];
+    // Dedup ledger: every successful capture's (length, first-200-chars) is
+    // recorded. If a later iteration produces a match, the click didn't
+    // actually fire (Stanford redisplayed the previous note — diag found
+    // this happens at ~1 in 7 iterations on long lists). Without dedup
+    // we'd mislabel note N's body as belonging to note M.
+    const seenCaptures = [];
+    function isDuplicate(html) {
+      if (!html) return false;
+      const head = html.slice(0, 200);
+      return seenCaptures.some(c => c.len === html.length && c.head === head);
+    }
 
     for (let i = 0; i < initialButtonCount; i++) {
       const btns = await ensureListView();
@@ -131,26 +142,31 @@ class ScrapeJobs {
       });
       btn.click();
 
-      // Wait for the per-note body to render. Either URL changed (separate
-      // note-detail page) or .pgSection content grew substantially in place.
-      // 1500 char threshold filters out re-renders that are just larger list
-      // skeletons; real note bodies are 5–200 KB.
+      // Wait for the per-note body to render. After a back-link click the
+      // section is reset to empty, so any non-empty .pgSection that's
+      // grown past a small floor (100 chars — long enough to filter out
+      // loading-state placeholders, short enough to accept brief notes
+      // like refill stubs, declined-vaccine entries, etc.) is a real note.
+      // Diag showed successful captures resolve in 400-810ms; cap the
+      // poll at 5s instead of 15s so failed iterations don't bleed the
+      // session timeout budget.
       let html = '';
       let finalSectionLen = 0;
       let sectionChanged = false;
       const t0 = Date.now();
-      while (Date.now() - t0 < 15000) {
+      while (Date.now() - t0 < 5000) {
         await new Promise(r => setTimeout(r, 400));
         const section = document.querySelector('.pgSection');
         const text = section?.textContent || '';
         finalSectionLen = text.length;
         if (text !== beforeText) sectionChanged = true;
-        if (section && text.length > 1500 && text !== beforeText) {
+        if (section && text.length > 100 && text !== beforeText) {
           html = section.outerHTML;
           break;
         }
       }
 
+      const duplicate = isDuplicate(html);
       diag('post-click', {
         i,
         urlPath: urlPathOnly(location.href),
@@ -158,10 +174,19 @@ class ScrapeJobs {
         sectionLen: finalSectionLen,
         sectionChanged,
         capturedLen: html.length,
+        duplicate,
         pollMs: Date.now() - t0,
       });
 
-      notes.push({ label, html, htmlLength: html.length });
+      if (html && !duplicate) {
+        seenCaptures.push({ len: html.length, head: html.slice(0, 200) });
+        notes.push({ label, html, htmlLength: html.length });
+      } else {
+        // Push the label anyway so the downstream count of attempted
+        // notes is accurate; convert_mobile_batch_to_v3_notes.py skips
+        // entries with empty html.
+        notes.push({ label, html: '', htmlLength: 0 });
+      }
 
       // Navigate back to the list. Prefer history.back() when click changed
       // the URL; otherwise look for an in-page back affordance.
