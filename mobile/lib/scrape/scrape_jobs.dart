@@ -429,6 +429,76 @@ class ScrapeJobs {
     };
   } catch (_) {}
 
+  // ── In-app nav primer ─────────────────────────────────────────
+  // 30s direct-loadUrl poll proved the Stanford SPA is inert under
+  // direct deep-linking: bodyLength stayed at 7.5KB, zero XHRs, zero
+  // iframes mounted. The SPA expects in-app navigation (a click within
+  // its own chrome). On entry, we look for the folder sidebar link
+  // matching the current folder (Inbox / Sent) and click it. This
+  // is what wakes the messaging module up.
+  //
+  // Folder link finder: matches by text + href substring. Tries the
+  // OPPOSITE folder first and back, in case clicking the active folder
+  // is a no-op for the SPA router.
+  function findFolderLink(targetFolder) {
+    const wantText = targetFolder === 'inbox' ? 'inbox' : 'sent';
+    const wantHref = targetFolder === 'inbox' ? '/messages/inbox' : '/messages/outbox';
+    return Array.from(document.querySelectorAll('a, [role="link"]')).find(a => {
+      const txt = (a.textContent || '').trim().toLowerCase();
+      const href = (a.getAttribute('href') || '');
+      return txt === wantText && href.indexOf(wantHref) !== -1;
+    });
+  }
+  const primerEvents = [];
+  function primerLog(stage, detail) {
+    primerEvents.push({ stage, atMs: Date.now() - t0, ...(detail || {}) });
+  }
+  primerLog('start', { folder, pathname: location.pathname });
+
+  // Step 1: ensure the SPA has finished its initial chrome mount.
+  // The Inbox/Sent heading is visible at body length ~7.5KB after
+  // ~2-3s — wait up to 5s for "Inbox" / "Sent Messages" h2 to be in
+  // the DOM before trying the click primer.
+  const t_pre = Date.now();
+  while (Date.now() - t_pre < 5000) {
+    const headings = Array.from(document.querySelectorAll('h1, h2'))
+      .map(h => (h.textContent || '').trim().toLowerCase());
+    if (headings.some(h => h === 'inbox' || h === 'sent messages')) break;
+    await new Promise(r => setTimeout(r, 300));
+  }
+  primerLog('chrome-ready', { bodyLen: (document.body?.textContent || '').length });
+
+  // Step 2: prime via sidebar click. We try BOTH the target folder
+  // and (if needed) the opposite folder + back, since clicking the
+  // active route may be a no-op for the SPA router.
+  let primerLink = findFolderLink(folder);
+  if (primerLink) {
+    primerLink.click();
+    primerLog('clicked-target-folder', { href: primerLink.getAttribute('href') });
+    // Brief wait for SPA to react
+    await new Promise(r => setTimeout(r, 1500));
+  } else {
+    primerLog('target-folder-link-not-found');
+  }
+
+  // If still no body growth after the target-folder click, try the
+  // opposite-then-back sidewinder.
+  if ((document.body?.textContent || '').length < 12000) {
+    const oppositeFolder = folder === 'inbox' ? 'outbox' : 'inbox';
+    const oppLink = findFolderLink(oppositeFolder);
+    if (oppLink) {
+      oppLink.click();
+      primerLog('clicked-opposite-folder', { folder: oppositeFolder });
+      await new Promise(r => setTimeout(r, 1500));
+      const backLink = findFolderLink(folder);
+      if (backLink) {
+        backLink.click();
+        primerLog('clicked-target-folder-again');
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+  }
+
   // ── Long poll: track iframe appearances, attempt to dismiss any
   // interstitial modal/banner, find rows when they appear ──────
   // 30s window. Successful nav-and-render of list should resolve
@@ -657,6 +727,7 @@ class ScrapeJobs {
     iframes,
     iframeAppearances,
     dismissAttempts,
+    primerEvents,
     xhrLog,
     firstRowParse,
     error: rows.length === 0 ? 'no-rows-found' : null,
