@@ -436,6 +436,58 @@ class ScrapeJobs {
   // dates). Only structural and url-shaped data. Class/tag names,
   // counts, href patterns, page title/headings (which are page-chrome
   // strings like "Inbox" / "Sent Messages", not patient data).
+
+  // Iframe enumeration — Stanford's MyHealth wrapper may load the actual
+  // message list inside an iframe (cross-origin, blocked from JS access).
+  // Reporting iframe src tells us where the real list URL is. Also try
+  // contentDocument access — if same-origin, we can scrape from there.
+  const iframeEls = Array.from(document.querySelectorAll('iframe'));
+  const iframes = iframeEls.map(f => {
+    let sameOriginAnchors = -1;
+    let sameOriginMessageyAnchors = [];
+    let accessError = null;
+    try {
+      const idoc = f.contentDocument;
+      if (idoc) {
+        sameOriginAnchors = idoc.querySelectorAll('a').length;
+        sameOriginMessageyAnchors = Array.from(
+          idoc.querySelectorAll('a[href*="messag"], a[href*="detail"]'))
+          .slice(0, 8)
+          .map(a => a.getAttribute('href'));
+      } else {
+        accessError = 'no-contentDocument';
+      }
+    } catch (e) {
+      accessError = (e.message || '').slice(0, 100);
+    }
+    return {
+      src: f.src || f.getAttribute('src') || '',
+      id: f.id || '',
+      name: f.name || '',
+      classes: (f.className || '').slice(0, 80),
+      width: f.offsetWidth,
+      height: f.offsetHeight,
+      visible: f.offsetWidth > 0 && f.offsetHeight > 0,
+      sameOriginAnchors,
+      sameOriginMessageyAnchors,
+      accessError,
+    };
+  });
+
+  // Body HTML snippet — chrome only since rows aren't here. PHI-safe at
+  // this body length; if rows WERE rendered we'd see body length 50KB+.
+  // 4000-char window is enough to see iframe declarations, key class
+  // names, and any placeholder div awaiting JS-loaded content.
+  const bodyHTMLSnippet = (document.body?.innerHTML || '').slice(0, 4000);
+
+  // Body text snippet — first 400 chars of human-visible text. Lets us
+  // confirm what the page actually shows (e.g., a "loading..." message,
+  // a session-expired notice, the inbox header etc).
+  const bodyTextSnippet = (document.body?.textContent || '')
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .slice(0, 400);
+
   const allAnchors = Array.from(document.querySelectorAll('a'));
   const hrefAttrs = allAnchors
     .map(a => a.getAttribute('href') || '')
@@ -518,9 +570,14 @@ class ScrapeJobs {
     hrefBuckets,
     onExpectedRoute,
     bodyLength: (document.body?.textContent || '').length,
+    bodyTextSnippet,
+    iframes,
     firstRowParse,
     error: rows.length === 0 ? 'no-rows-found' : null,
     diagnostics: structuralDiag,
+    // Heavy field — kept last for readability; only included on failure
+    // to keep the discovery JSON manageable on successful pages.
+    bodyHTMLSnippet: rows.length === 0 ? bodyHTMLSnippet : null,
   });
 })();
 ''';
