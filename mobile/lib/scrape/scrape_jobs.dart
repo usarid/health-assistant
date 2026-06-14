@@ -431,59 +431,96 @@ class ScrapeJobs {
     return { hasNext: false };
   }
 
-  // If we found nothing, dump structural diagnostics so the host can
-  // figure out which selectors to use. PHI-safe: anchor hrefs hold IDs
-  // only, no message bodies; class/tag names are structure not content.
-  let diagnostics = null;
-  if (rows.length === 0) {
-    const allAnchors = Array.from(document.querySelectorAll('a'));
-    const hrefAttrs = allAnchors
-      .map(a => a.getAttribute('href') || '')
-      .filter(h => h && h !== '#' && !h.startsWith('javascript:'));
-    diagnostics = {
-      anchorCount: allAnchors.length,
-      tableCount: document.querySelectorAll('table').length,
-      // hrefs containing message-y substrings — likely candidates for
-      // detail-page links if our selector missed
-      messageyHrefs: hrefAttrs
-        .filter(h => /messag|msg|detail/i.test(h))
-        .slice(0, 12),
-      // generic href sample to see what routing style the page uses
-      otherHrefSample: hrefAttrs.slice(0, 15),
-      // Some Epic builds wire clicks via JS, not anchors — look for those
-      clickableRowSamples: Array.from(document.querySelectorAll(
-        'tr[onclick], li[onclick], [data-msg-id], [data-message-id], [data-id]'))
-        .slice(0, 5)
-        .map(el => ({
-          tag: el.tagName,
-          classes: (el.className || '').slice(0, 80),
-          onclick: (el.getAttribute('onclick') || '').slice(0, 200),
-          dataMsgId: el.getAttribute('data-msg-id')
-            || el.getAttribute('data-message-id')
-            || el.getAttribute('data-id'),
-        })),
-      // Top-level structural classes — first 8 elements with a class on
-      // the visible page area
-      structureSample: Array.from(document.querySelectorAll(
-        'main *[class], body > div *[class]'))
-        .filter(el => el.children.length > 0)
-        .slice(0, 8)
-        .map(el => ({
-          tag: el.tagName,
-          classes: (el.className || '').slice(0, 80),
-          childCount: el.children.length,
-        })),
-    };
+  // ── ALWAYS-emitted diagnostics ─────────────────────────────────
+  // PHI hygiene: NO text content from rows (subjects, sender names,
+  // dates). Only structural and url-shaped data. Class/tag names,
+  // counts, href patterns, page title/headings (which are page-chrome
+  // strings like "Inbox" / "Sent Messages", not patient data).
+  const allAnchors = Array.from(document.querySelectorAll('a'));
+  const hrefAttrs = allAnchors
+    .map(a => a.getAttribute('href') || '')
+    .filter(h => h && h !== '#' && !h.startsWith('javascript:'));
+
+  // Group hrefs by their second-level path segment so we see Stanford's
+  // routing style without listing every URL. e.g. {'/signedin/messages':12, '/signedin/health':3}
+  const hrefBuckets = {};
+  for (const h of hrefAttrs) {
+    let bucket;
+    try {
+      const u = h.startsWith('http') ? new URL(h) : new URL(h, location.origin);
+      const seg = u.pathname.split('/').slice(0, 3).join('/');
+      bucket = seg || '/';
+    } catch { bucket = h.split('?')[0].split('#')[0].slice(0, 40); }
+    hrefBuckets[bucket] = (hrefBuckets[bucket] || 0) + 1;
   }
 
+  // Sample of first row's parsing details (if any rows were found) — lets
+  // us verify cell extraction worked correctly, PHI-safely (we emit row
+  // structure only — text lengths, no content).
+  const firstRowParse = rows.length > 0 ? {
+    sample: { id: rows[0].id, folder: rows[0].folder,
+              isReply: rows[0].isReply, isUnread: rows[0].isUnread,
+              subjectLen: (rows[0].subject || '').length,
+              otherPartyLen: (rows[0].otherParty || '').length,
+              dateLen: (rows[0].date || '').length },
+  } : null;
+
+  // On 0 rows: structural snapshot of clickable elements (Epic SPAs
+  // sometimes wire row clicks via onclick attrs, not anchors).
+  const structuralDiag = rows.length === 0 ? {
+    clickableRowSamples: Array.from(document.querySelectorAll(
+      'tr[onclick], li[onclick], [data-msg-id], [data-message-id], [data-id]'))
+      .slice(0, 5)
+      .map(el => ({
+        tag: el.tagName,
+        classes: (el.className || '').slice(0, 80),
+        onclick: (el.getAttribute('onclick') || '').slice(0, 200),
+        dataMsgId: el.getAttribute('data-msg-id')
+          || el.getAttribute('data-message-id')
+          || el.getAttribute('data-id'),
+      })),
+    classedContainerSample: Array.from(document.querySelectorAll(
+      'main *[class], body > div *[class]'))
+      .filter(el => el.children.length > 2 && el.children.length < 50)
+      .slice(0, 10)
+      .map(el => ({
+        tag: el.tagName,
+        classes: (el.className || '').slice(0, 80),
+        childCount: el.children.length,
+        firstChildTag: el.children[0]?.tagName || '',
+      })),
+    // Message-y href patterns (closest candidates for detail-page links)
+    messageyHrefs: hrefAttrs
+      .filter(h => /messag|msg|detail/i.test(h))
+      .slice(0, 12),
+  } : null;
+
+  const folderMatch2 = location.pathname.match(/\\/messages\\/(inbox|outbox)/);
+  const onExpectedRoute = !!folderMatch2;
+
   emit({
+    // Always — for every page, success or fail
     url: location.href,
+    pathname: location.pathname,
     folder,
     rowCount: rows.length,
     rows,
     pagination: findNext(),
+    pollMs: Date.now() - t0,
+    pollTimedOut: rows.length === 0,
+    pageTitle: document.title,
+    headings: Array.from(document.querySelectorAll('h1, h2'))
+      .slice(0, 3)
+      .map(h => (h.textContent || '').trim().slice(0, 60)),
+    anchorCount: allAnchors.length,
+    anchorsWithHref: hrefAttrs.length,
+    tableCount: document.querySelectorAll('table').length,
+    hrefBuckets,
+    onExpectedRoute,
+    bodyLength: (document.body?.textContent || '').length,
+    firstRowParse,
     error: rows.length === 0 ? 'no-rows-found' : null,
-    diagnostics,
+    diagnostics: structuralDiag,
   });
 })();
 ''';

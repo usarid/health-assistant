@@ -746,6 +746,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     });
     final startedAt = DateTime.now();
     final allRows = <Map<String, dynamic>>[];
+    // Per-page reports: ONE entry per HTTP page we visited, containing
+    // the request URL, the landed URL (in case Stanford redirected), and
+    // the full JS-side diagnostic block. Lets us debug any selector /
+    // pagination / routing failure from a single discovery file.
+    final pageReports = <Map<String, dynamic>>[];
     final meta = <String, dynamic>{
       'inboxPages': 0,
       'outboxPages': 0,
@@ -766,22 +771,38 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           final url = page == 1 ? baseUrl : '$baseUrl?page=$page';
           setState(() => _status =
               'Discovering $folder page $page (collected ${allRows.length})…');
+          final t0 = DateTime.now();
           final res = await _scrapeMessageListPage(url);
+          final elapsedMs = DateTime.now().difference(t0).inMilliseconds;
+
+          // Capture landed URL from controller — tells us if Stanford
+          // redirected us away from the URL we asked for.
+          String landedUrl = '';
+          try { landedUrl = (await _ctrl!.getUrl())?.toString() ?? ''; }
+          catch (_) {}
+
+          final report = <String, dynamic>{
+            'folder': folder,
+            'page': page,
+            'requestedUrl': url,
+            'landedUrl': landedUrl,
+            'elapsedMs': elapsedMs,
+            // Everything the JS emitted (minus the rows themselves — too
+            // bulky and saved separately at the top level).
+            ...?res?.map((k, v) => MapEntry(k, k == 'rows' ? null : v)),
+          };
+          pageReports.add(report);
+
           if (res == null) {
             meta['errors'].add('$folder p$page nav-failed');
             break;
           }
           final err = res['error']?.toString();
-          if (err != null && err.isNotEmpty && page == 1) {
-            // No rows on page 1 — save the diagnostics block so we can
-            // see what selectors to fix.
+          final rows = (res['rows'] as List?) ?? const [];
+          if (err != null && err.isNotEmpty && rows.isEmpty && page == 1) {
             meta['errors'].add('$folder p1: $err');
-            if (res['diagnostics'] != null) {
-              meta['${folder}Diagnostics'] = res['diagnostics'];
-            }
             break;
           }
-          final rows = (res['rows'] as List?) ?? const [];
           newRowsThisPage = 0;
           for (final r in rows) {
             if (r is! Map) continue;
@@ -799,6 +820,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           page += 1;
         }
       }
+      meta['pageReports'] = pageReports;
 
       final finishedAt = DateTime.now();
       final path = await LocalWriter.writeMessagesDiscovery(
