@@ -403,13 +403,96 @@ class ScrapeJobs {
     });
   }
 
-  // Wait up to 8s for SPA to mount the list
+  // ── XHR + fetch interception ─────────────────────────────────
+  // Capture the URLs of every network call the SPA makes during the
+  // poll window. URL-only, no request/response bodies (URLs are
+  // routing info, not patient data — PHI-safe). This is the killer
+  // diagnostic: once we see the actual API endpoint Stanford's SPA
+  // hits to load the list, we may be able to call it directly and
+  // skip iframe + render-wait entirely.
   const t0 = Date.now();
+  const xhrLog = [];
+  try {
+    const origFetch = window.fetch;
+    window.fetch = function(input, init) {
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      xhrLog.push({ kind: 'fetch', method: (init && init.method) || 'GET',
+                    url: url.slice(0, 200), at: Date.now() - t0 });
+      return origFetch.apply(this, arguments);
+    };
+    const OrigXHR = window.XMLHttpRequest;
+    const origOpen = OrigXHR.prototype.open;
+    OrigXHR.prototype.open = function(method, url) {
+      xhrLog.push({ kind: 'xhr', method,
+                    url: (url || '').slice(0, 200), at: Date.now() - t0 });
+      return origOpen.apply(this, arguments);
+    };
+  } catch (_) {}
+
+  // ── Long poll: track iframe appearances, attempt to dismiss any
+  // interstitial modal/banner, find rows when they appear ──────
+  // 30s window. Successful nav-and-render of list should resolve
+  // long before this; the budget is for slow iframe mount + interstitial.
   let rows = [];
-  while (Date.now() - t0 < 8000) {
+  const iframeAppearances = [];
+  let dismissAttempts = 0;
+  while (Date.now() - t0 < 30000) {
     rows = findRows();
     if (rows.length > 0) break;
-    await new Promise(r => setTimeout(r, 400));
+
+    // Track every new iframe we see with its arrival time
+    const currentIframes = Array.from(document.querySelectorAll('iframe'));
+    for (const f of currentIframes) {
+      const key = (f.src || '') + ':' + (f.id || '') + ':' + (f.name || '');
+      if (!iframeAppearances.some(ia => ia.key === key)) {
+        iframeAppearances.push({
+          key,
+          atMs: Date.now() - t0,
+          src: f.src || f.getAttribute('src') || '',
+          id: f.id || '',
+          name: f.name || '',
+          width: f.offsetWidth,
+          height: f.offsetHeight,
+        });
+      }
+    }
+
+    // Best-effort dismissal of any obvious interstitial — Stanford's config
+    // had enableMessagesInterstitial:'true'. Pattern-match visible buttons
+    // with common dismiss copy. Idempotent — re-clicking the same button
+    // after it's gone is a no-op.
+    const dismissCandidates = Array.from(document.querySelectorAll(
+      'button, a, [role="button"]'))
+      .filter(b => {
+        if (b.offsetWidth === 0 || b.offsetHeight === 0) return false;
+        const t = (b.textContent || '').trim();
+        return /^(continue|ok|got it|i agree|accept|dismiss|close|view\\s+messages?)\$/i.test(t);
+      });
+    if (dismissCandidates.length > 0) {
+      dismissCandidates[0].click();
+      dismissAttempts += 1;
+    }
+
+    // If an iframe appeared and is large, check whether its contentDocument
+    // is accessible (same-origin); if so, try findRows() inside.
+    for (const f of currentIframes) {
+      if (f.offsetWidth < 100 || f.offsetHeight < 100) continue;
+      try {
+        const idoc = f.contentDocument;
+        if (!idoc) continue;
+        const innerLinks = Array.from(idoc.querySelectorAll(
+          'a[href*="messages/detail/"]'));
+        if (innerLinks.length > 0) {
+          // Same-origin iframe with message links — we could potentially
+          // scrape from here. Mark via diag but don't change the row-pull
+          // path in this discovery commit.
+          xhrLog.push({ kind: 'iframe-has-links', url: f.src,
+                        count: innerLinks.length, at: Date.now() - t0 });
+        }
+      } catch (_) { /* cross-origin */ }
+    }
+
+    await new Promise(r => setTimeout(r, 500));
   }
 
   const folderMatch = location.pathname.match(/\\/messages\\/(inbox|outbox)/);
@@ -572,6 +655,9 @@ class ScrapeJobs {
     bodyLength: (document.body?.textContent || '').length,
     bodyTextSnippet,
     iframes,
+    iframeAppearances,
+    dismissAttempts,
+    xhrLog,
     firstRowParse,
     error: rows.length === 0 ? 'no-rows-found' : null,
     diagnostics: structuralDiag,

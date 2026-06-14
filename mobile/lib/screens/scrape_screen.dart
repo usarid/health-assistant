@@ -860,9 +860,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } catch (e) {
       return {'error': 'inject-failed: $e'};
     }
+    // JS polls up to 30s for SPA + iframe to mount; allow 40s round-trip.
     try {
       return await _messageListCompleter!.future
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 40));
     } on TimeoutException {
       return {'error': 'scrape-timeout'};
     }
