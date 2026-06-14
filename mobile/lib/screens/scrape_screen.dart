@@ -9,21 +9,21 @@ import '../scrape/stanford_config.dart';
 import '../storage/credentials_store.dart';
 import '../storage/local_writer.dart';
 
-/// Iteration 2 scrape screen.
+/// Scrape screen — batch loop over Stanford visits.
 ///
-/// Beyond iteration 1's single-visit demo, this:
 ///   - Loads the Stanford CSN list from assets/stanford-v3-visits.json
 ///     (filtered to visits with shareable notes — typically ~106 entries).
 ///   - Loops over each CSN: host-driven controller.loadUrl → await
 ///     onLoadStop → inject scraper → await saveNote callback → persist.
-///   - Runs keepalive belt-and-suspenders:
-///       (a) per-visit scrape JS fires keepalive fetches at scrape start
-///           (~10s cadence)
-///       (b) Dart Timer.periodic injects a keepalive JS every 30s as a
-///           safety net if a per-visit scrape stalls
-///   - Persists each note to its own JSON immediately (crash-safe), updates
-///     a manifest, and writes a consolidated JSON at the end.
-///   - Surfaces live progress: X/N captured, Y real, Z errors • K pings.
+///   - Persists each note (or multi-note bundle) to its own JSON
+///     immediately (crash-safe), updates a manifest, and writes a
+///     consolidated JSON at the end.
+///   - Surfaces live progress: index, captured (real), empty, errors.
+///
+/// No keepalive: C-022 confirmed Stanford fingerprints injected keepalive
+/// fetches as a bot signature and revokes the session. Natural per-visit
+/// navigation cadence (1 visit per ~10-15s) keeps the session warm
+/// without any synthetic pings.
 class ScrapeScreen extends StatefulWidget {
   const ScrapeScreen({super.key});
 
@@ -59,9 +59,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // needing to correlate timestamps.
   String? _currentCsn;
 
-  // Keepalive (Dart-side safety net)
-  Timer? _keepaliveTimer;
-  int _keepalivePings = 0;
 
   // Diagnostics: off by default (clean UX). User toggles via overflow menu
   // when they need to capture a screenshot for support. Resets on app
@@ -72,11 +69,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // setState rebuilds that don't relate to it.
   String _diagLine = '';
 
-  @override
-  void dispose() {
-    _keepaliveTimer?.cancel();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -118,9 +110,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(
-                      '$_batchIndex/$_batchTotal • captured ${_captured.length} '
-                      '(${_captured.where((c) => c.visibleTextLength > 100).length} real) '
-                      '• errors ${_errors.length} • keepalive $_keepalivePings',
+                      _buildProgressLine(),
                       style: const TextStyle(fontSize: 11, color: Colors.black87, fontFamily: 'monospace'),
                     ),
                   ),
@@ -243,6 +233,24 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         ),
       ],
     );
+  }
+
+  /// Status-line builder. Splits the errors bucket into truly-empty
+  /// (Stanford-confirmed no-notes visits — not worth showing as "errors"
+  /// to the user; they're not a problem to fix) and real errors (which
+  /// might be transient and worth retrying).
+  static const _emptyReasons = {'no-notes-available', 'no-notes-tab'};
+  String _buildProgressLine() {
+    final real = _captured.where((c) => c.visibleTextLength > 100).length;
+    final empty = _errors.where((e) => _emptyReasons.contains(e.reason)).length;
+    final realErrors = _errors.length - empty;
+    final parts = [
+      '$_batchIndex/$_batchTotal',
+      'captured ${_captured.length} ($real real)',
+      if (empty > 0) 'empty $empty',
+      if (realErrors > 0) 'errors $realErrors',
+    ];
+    return parts.join(' • ');
   }
 
   // ── Handler the WebView calls back into ────────────────────────────
@@ -524,11 +532,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _captured.clear();
       _errors.clear();
       _batchStartedAt = DateTime.now();
-      _keepalivePings = 0;
-      _status = 'Scraping ${csns.length} visits — keepalive every 30s';
+      _status = 'Scraping ${csns.length} visits…';
     });
-
-    _startKeepalive();
 
     final rng = Random();
     try {
@@ -623,12 +628,15 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         finishedAt: finishedAt,
       );
       final dur = finishedAt.difference(_batchStartedAt!);
-      setState(() => _status =
-          'DONE in ${dur.inSeconds}s — ${_captured.length} captured '
-          '(${_captured.where((c) => c.visibleTextLength > 100).length} real), '
-          '${_errors.length} errors → $path');
+      final real = _captured.where((c) => c.visibleTextLength > 100).length;
+      final empty = _errors.where((e) => _emptyReasons.contains(e.reason)).length;
+      final realErrors = _errors.length - empty;
+      final tail = StringBuffer()
+        ..write('${_captured.length} captured ($real real)');
+      if (empty > 0) tail.write(', $empty empty');
+      if (realErrors > 0) tail.write(', $realErrors errors');
+      setState(() => _status = 'DONE in ${dur.inSeconds}s — $tail → $path');
     } finally {
-      _stopKeepalive();
       setState(() => _batchRunning = false);
     }
   }
@@ -703,22 +711,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     // Keep the path but drop everything after csn= (which is identifying).
     final i = s.indexOf('csn=');
     return i >= 0 ? '${s.substring(0, i)}csn=…' : (s.length > 80 ? '${s.substring(0, 80)}…' : s);
-  }
-
-  // ── Keepalive (Dart-side safety net) ───────────────────────────────
-  // EXPERIMENT 2026-06-13: keepalive disabled entirely. Working hypothesis:
-  // injected keepalive fetches are themselves what Stanford's anti-abuse
-  // flags. If this batch completes without keepalive, we re-enable with a
-  // different mechanism (e.g., let the page's own JS handle it via clicks).
-  void _startKeepalive() {
-    _keepaliveTimer?.cancel();
-    _keepalivePings = 0;
-    // No-op — see comment above.
-  }
-
-  void _stopKeepalive() {
-    _keepaliveTimer?.cancel();
-    _keepaliveTimer = null;
   }
 
   // ── CSN list source (iteration 3 will replace with portal-driven discovery) ──

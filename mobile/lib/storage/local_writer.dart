@@ -210,9 +210,14 @@ class LocalWriter {
             final csn = e['csn'];
             final reason = e['reason'];
             if (csn is! String) continue;
-            // Stanford's portal-confirmed "No Notes Available" reading is
-            // definitive — don't keep retrying these visits.
-            if (reason == 'no-notes-available') {
+            // Stanford-confirmed empty signals — don't keep retrying:
+            //   'no-notes-available' = portal explicitly said "No Notes
+            //     Available" (the canonical empty-state panel)
+            //   'no-notes-tab'       = the visit's after-visit-summary
+            //     page doesn't render a Clinical Notes tab at all (some
+            //     visit types — e.g. missed appointments, certain checkin
+            //     flows — never have notes by design)
+            if (reason == 'no-notes-available' || reason == 'no-notes-tab') {
               upgrade(csn, 'empty');
             } else {
               upgrade(csn, 'errored');

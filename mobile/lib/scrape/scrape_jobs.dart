@@ -80,23 +80,31 @@ class ScrapeJobs {
 
   // Race window: poll for one of:
   //   (a) VIEW NOTE buttons → list view
-  //   (b) .pgSection text contains Stanford's "No Notes Available" string
+  //   (b) Stanford's "No Notes Available" copy anywhere on the page
   //       → empty visit (no care-team notes shareable for this encounter)
   //   (c) .pgSection grows past 200 chars → inline note rendered
   // Check buttons FIRST each tick — on a multi-note visit, .pgSection may
   // have the list text >200 chars even when buttons are the right path.
-  // 'empty' check is next so we don't misclassify a short "No Notes
-  // Available" panel as a tiny inline note.
+  // 'empty' check is next, scanning document.body (not just .pgSection),
+  // because Stanford renders the empty-state panel in a sibling container
+  // for some visit types — first run showed the regex never matched when
+  // scoped to .pgSection.
+  function bodyHasNoNotesAvailable() {
+    return /no\\s+notes\\s+available/i.test(document.body?.textContent || '');
+  }
   const startedAt = Date.now();
   let mode = null;
   while (Date.now() - startedAt < $pollMs) {
     await new Promise(r => setTimeout(r, 400));
     if (findViewNoteButtons().length > 0) { mode = 'list'; break; }
+    if (bodyHasNoNotesAvailable()) { mode = 'empty'; break; }
     const section = document.querySelector('.pgSection');
-    const sectionText = section?.textContent || '';
-    if (/no\\s+notes\\s+available/i.test(sectionText)) { mode = 'empty'; break; }
-    if (section && sectionText.length > 200) { mode = 'inline'; break; }
+    if (section && section.textContent.length > 200) { mode = 'inline'; break; }
   }
+  // Final disambiguation after timeout: maybe the empty-state panel
+  // appeared just past the poll window. Cheap — only runs when we'd
+  // otherwise give up.
+  if (!mode && bodyHasNoNotesAvailable()) mode = 'empty';
 
   diag('mode-detected', { mode: mode || 'timeout', elapsedMs: Date.now() - startedAt });
 
