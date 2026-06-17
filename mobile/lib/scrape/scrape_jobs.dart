@@ -1358,6 +1358,81 @@ class ScrapeJobs {
 ''';
   }
 
+  /// Fetch one Stanford lab/imaging report's full HTML body.
+  ///
+  /// Unlike messages (which returned JSON via `/Private/Ajax/V1/Mailbox/
+  /// Message`), lab results are served as full HTML pages at
+  /// `https://mychart.stanfordhealthcare.org/myhealth_sso/app/test-results
+  /// /details?eorderid=<id>&lang=en-US` (~137KB per page). Discovered via
+  /// the user's DevTools capture: the legacy `/inside.asp?mode=labdetail`
+  /// 302-redirects to this modern URL.
+  ///
+  /// Cross-origin to `mychart.stanfordhealthcare.org` — the WebView is
+  /// authenticated against `myhealth.stanfordhealthcare.org`, and the
+  /// response carries `Access-Control-Allow-Origin: https://myhealth.
+  /// stanfordhealthcare.org` + `Access-Control-Allow-Credentials: true`,
+  /// so `fetch(... { credentials: 'include' })` is the right call.
+  ///
+  /// JS-side does NO parsing — saves the raw HTML, lets the Python
+  /// converter (Phase 4-3, with BeautifulSoup) extract structured
+  /// fields server-side. Simpler JS, cleaner separation.
+  ///
+  /// Result via callHandler('labDetail', payload):
+  ///   { eorderid, ok, status, html, error?, attempts, timings }
+  static String stanfordLabDetail({required String eorderid}) {
+    final eorderidJs = "'${eorderid.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    return '''
+(async () => {
+  const eorderid = $eorderidJs;
+  const t0 = Date.now();
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('labDetail', payload);
+    }
+  }
+
+  // Modern URL (direct — skips the legacy inside.asp 302 redirect).
+  const url = 'https://mychart.stanfordhealthcare.org/myhealth_sso/app/test-results/details'
+    + '?lang=en-US&eorderid=' + encodeURIComponent(eorderid);
+
+  const attempts = [];
+  try {
+    const tAttempt = Date.now();
+    const resp = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'Accept': 'text/html,application/xhtml+xml' },
+    });
+    const html = await resp.text();
+    attempts.push({
+      url, status: resp.status, ok: resp.ok,
+      htmlLength: html.length,
+      elapsedMs: Date.now() - tAttempt,
+    });
+    if (resp.ok && html.length > 0) {
+      emit({
+        eorderid, ok: true, status: resp.status, html,
+        attempts, timings: { totalMs: Date.now() - t0 },
+      });
+      return;
+    }
+    emit({
+      eorderid, ok: false, status: resp.status,
+      error: 'non-ok-or-empty', html: '',
+      attempts, timings: { totalMs: Date.now() - t0 },
+    });
+  } catch (e) {
+    emit({
+      eorderid, ok: false, error: 'fetch-failed',
+      message: (e && e.message) || String(e),
+      attempts, timings: { totalMs: Date.now() - t0 },
+    });
+  }
+})();
+''';
+  }
+
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,

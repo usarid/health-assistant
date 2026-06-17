@@ -184,6 +184,54 @@ class LocalWriter {
     return const [];
   }
 
+  /// Save one lab test-fetch result for inspection — Phase 4-2 probe.
+  static Future<String> writeLabTestFetch(Map<String, dynamic> result) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final file = File('${dir.path}/stanford-lab-test-fetch-$ts.json');
+    await file.writeAsString(jsonEncode(result));
+    return file.path;
+  }
+
+  /// Per-lab-result HTML body file — written once per fetched result
+  /// during the Phase 4-2 batch loop. Raw HTML, no JSON wrapper, since
+  /// the Phase 4-3 Python converter just needs to parse it.
+  static Future<String> writeLabBody(String eorderid, String html) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final labDir = Directory('${dir.path}/labs');
+    await labDir.create(recursive: true);
+    final file = File('${labDir.path}/stanford-lab-${_csnSlug(eorderid)}.html');
+    await file.writeAsString(html);
+    return file.path;
+  }
+
+  /// Consolidated lab batch index — small metadata-only file written
+  /// at end of run, lists every captured eorderid + size + per-result
+  /// error reasons. Phase 4-3 Python ingest reads this to find which
+  /// HTML files to parse.
+  static Future<String> writeLabBatchConsolidated({
+    required List<Map<String, dynamic>> captured,
+    required List<Map<String, dynamic>> errors,
+    required DateTime startedAt,
+    required DateTime finishedAt,
+  }) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
+    final file = File('${dir.path}/stanford-lab-batch-$ts.json');
+    final payload = {
+      'portal': 'stanford',
+      'kind': 'lab-bodies',
+      'startedAt': startedAt.toUtc().toIso8601String(),
+      'finishedAt': finishedAt.toUtc().toIso8601String(),
+      'capturedCount': captured.length,
+      'errorCount': errors.length,
+      'captured': captured,
+      'errors': errors,
+    };
+    await file.writeAsString(jsonEncode(payload));
+    return file.path;
+  }
+
   /// Per-message body file — one JSON per message ID for crash safety
   /// during long batch runs.
   static Future<String> writeMessageBody(

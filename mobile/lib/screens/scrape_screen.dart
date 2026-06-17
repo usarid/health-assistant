@@ -49,6 +49,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Completer<Map<String, dynamic>>? _scrapeCompleter;
   Completer<Map<String, dynamic>>? _messageListCompleter;
   Completer<Map<String, dynamic>>? _messageDetailCompleter;
+  Completer<Map<String, dynamic>>? _labDetailCompleter;
 
   // Batch state
   int _batchTotal = 0;
@@ -93,6 +94,9 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (Stanford)')),
               const PopupMenuItem(value: 'test-fetch-one-message', child: Text('Test: fetch one message body')),
               const PopupMenuItem(value: 'fetch-all-message-bodies', child: Text('Fetch all message bodies (Stanford)')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'test-fetch-one-lab', child: Text('Test: fetch one lab body')),
+              const PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (Stanford)')),
             ],
           ),
         ],
@@ -175,6 +179,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 c.addJavaScriptHandler(
                   handlerName: 'messageDetail',
                   callback: _onMessageDetailHandler,
+                );
+                c.addJavaScriptHandler(
+                  handlerName: 'labDetail',
+                  callback: _onLabDetailHandler,
                 );
               },
               onLoadStop: (c, url) async {
@@ -287,6 +295,17 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final m = Map<String, dynamic>.from(args.first as Map);
     if (_messageDetailCompleter != null && !_messageDetailCompleter!.isCompleted) {
       _messageDetailCompleter!.complete(m);
+    }
+    return {'ok': true};
+  }
+
+  /// JS handler for one fetched lab/imaging result HTML page (Phase 4-2).
+  /// Completes [_labDetailCompleter] with {eorderid, ok, html, attempts}.
+  Future<dynamic> _onLabDetailHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_labDetailCompleter != null && !_labDetailCompleter!.isCompleted) {
+      _labDetailCompleter!.complete(m);
     }
     return {'ok': true};
   }
@@ -412,6 +431,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _testFetchOneMessage();
     } else if (value == 'fetch-all-message-bodies') {
       await _fetchAllMessageBodies();
+    } else if (value == 'test-fetch-one-lab') {
+      await _testFetchOneLab();
+    } else if (value == 'fetch-all-lab-bodies') {
+      await _fetchAllLabBodies();
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
@@ -928,6 +951,159 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           'endpoint=$endpoint → $path');
     } finally {
       setState(() => _batchRunning = false);
+    }
+  }
+
+  /// One-shot probe — picks the first eorderid from the bundled
+  /// stanford-lab-orders.json asset and fetches its HTML body, saves
+  /// to a test-fetch file for inspection. Used to confirm the lab
+  /// detail endpoint actually returns content (not a redirect / login
+  /// shell / error page) before kicking off the full batch.
+  Future<void> _testFetchOneLab() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    final orders = await _loadLabOrders();
+    if (orders.isEmpty) {
+      setState(() => _status =
+          'No lab orders in assets — run tools/mobile/build_lab_orders_discovery.py '
+          'then scripts/sync-mobile-assets.sh, and reinstall the app.');
+      return;
+    }
+    final eorderid = orders.first['eorderid'] as String;
+    setState(() {
+      _batchRunning = true;
+      _status = 'Test fetch: lab $eorderid…';
+    });
+    try {
+      _labDetailCompleter = Completer<Map<String, dynamic>>();
+      try {
+        await _ctrl!.evaluateJavascript(
+          source: ScrapeJobs.stanfordLabDetail(eorderid: eorderid),
+        );
+      } catch (e) {
+        setState(() => _status = 'Inject failed: $e');
+        return;
+      }
+      Map<String, dynamic> result;
+      try {
+        result = await _labDetailCompleter!.future
+            .timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        setState(() => _status = 'Test fetch timed out (30s).');
+        return;
+      }
+      final path = await LocalWriter.writeLabTestFetch(result);
+      final ok = result['ok'] == true;
+      final len = (result['html'] ?? '').toString().length;
+      setState(() => _status = 'Test fetch ${ok ? "OK" : "FAILED"} — '
+          'htmlLen=$len → $path');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// Iterate every eorderid in the bundled stanford-lab-orders.json
+  /// asset and fetch its HTML detail page from mychart.stanfordhealthcare.org.
+  /// Per-result HTML files written immediately (crash-safe); manifest
+  /// rewritten per result; consolidated batch index at end.
+  Future<void> _fetchAllLabBodies() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    final orders = await _loadLabOrders();
+    if (orders.isEmpty) {
+      setState(() => _status =
+          'No lab orders in assets — run tools/mobile/build_lab_orders_discovery.py '
+          'then scripts/sync-mobile-assets.sh, and reinstall the app.');
+      return;
+    }
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchTotal = orders.length;
+      _batchIndex = 0;
+      _batchStartedAt = DateTime.now();
+      _status = 'Fetching ${orders.length} lab result bodies…';
+    });
+    final captured = <Map<String, dynamic>>[];
+    final errors = <Map<String, dynamic>>[];
+    final rng = Random();
+    try {
+      for (int i = 0; i < orders.length; i++) {
+        if (_abortRequested) {
+          setState(() => _status = 'Aborted at $i/${orders.length}');
+          break;
+        }
+        final eorderid = orders[i]['eorderid'] as String;
+        final code = (orders[i]['code'] ?? '').toString();
+        setState(() {
+          _batchIndex = i + 1;
+          _status = 'Lab $_batchIndex/$_batchTotal '
+              '— ${captured.length} captured, ${errors.length} errors';
+        });
+        _labDetailCompleter = Completer<Map<String, dynamic>>();
+        try {
+          await _ctrl!.evaluateJavascript(
+            source: ScrapeJobs.stanfordLabDetail(eorderid: eorderid),
+          );
+        } catch (e) {
+          errors.add({'eorderid': eorderid, 'reason': 'inject-failed:$e'});
+          continue;
+        }
+        Map<String, dynamic> result;
+        try {
+          result = await _labDetailCompleter!.future
+              .timeout(const Duration(seconds: 25));
+        } on TimeoutException {
+          errors.add({'eorderid': eorderid, 'reason': 'fetch-timeout'});
+          continue;
+        }
+        if (result['ok'] != true) {
+          errors.add({
+            'eorderid': eorderid,
+            'reason': result['error']?.toString() ?? 'unknown',
+            'status': result['status'],
+          });
+          continue;
+        }
+        final html = (result['html'] ?? '').toString();
+        captured.add({
+          'eorderid': eorderid,
+          'code': code,
+          'htmlLength': html.length,
+          'capturedAt': DateTime.now().toUtc().toIso8601String(),
+        });
+        await LocalWriter.writeLabBody(eorderid, html);
+        // Light pacing — labs HTML is ~137KB each; ~150-300ms is plenty
+        if (i + 1 < orders.length) {
+          final pauseMs = 200 + rng.nextInt(300);
+          await Future.delayed(Duration(milliseconds: pauseMs));
+        }
+      }
+      final finishedAt = DateTime.now();
+      final path = await LocalWriter.writeLabBatchConsolidated(
+        captured: captured,
+        errors: errors,
+        startedAt: _batchStartedAt!,
+        finishedAt: finishedAt,
+      );
+      final dur = finishedAt.difference(_batchStartedAt!);
+      setState(() => _status = 'DONE in ${dur.inSeconds}s — '
+          '${captured.length} captured, ${errors.length} errors → $path');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// Read the bundled lab-orders asset and return the orders array.
+  /// Empty list if the asset is missing (user hasn't run discovery + sync).
+  Future<List<Map<String, dynamic>>> _loadLabOrders() async {
+    try {
+      final raw = await rootBundle.loadString('assets/stanford-lab-orders.json');
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final orders = (data['orders'] as List?) ?? const [];
+      return orders.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList();
+    } catch (_) {
+      return const [];
     }
   }
 
