@@ -294,6 +294,22 @@
   .msg-bubble.inbound .msg-bubble-time { color: #888; }
   .msg-bubble.outbound .msg-bubble-time { color: rgba(255,255,255,0.85); }
 
+  /* Back-to-list button — only visible on narrow viewports */
+  .msg-back-btn { display: none; background: none; border: none; color: #4889ad; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 6px; }
+  .msg-back-btn:hover { text-decoration: underline; }
+
+  /* Single-pane mobile layout: <800px viewport shows ONE pane at a
+     time. Default state = list visible, thread hidden. Body class
+     'msg-thread-open' flips them when a conversation is opened. */
+  @media (max-width: 800px) {
+    .msg-layout { gap: 0; flex-direction: column; }
+    .msg-list-pane { width: 100%; max-height: calc(100vh - 130px); }
+    .msg-thread-pane { display: none; max-height: calc(100vh - 130px); }
+    body.msg-thread-open .msg-list-pane { display: none; }
+    body.msg-thread-open .msg-thread-pane { display: flex; }
+    .msg-back-btn { display: inline-block; }
+  }
+
   /* ── Timeline page ── */
   .tl-layout { display: flex; gap: 0; min-height: calc(100vh - 130px); }
 
@@ -1803,6 +1819,7 @@ function showPage(page) {
   if (navLink) navLink.classList.add('active');
   if (page === 'timeline' && typeof tlInitialized !== 'undefined' && !tlInitialized) initTimeline();
   if (page === 'messages' && typeof msgInitialized !== 'undefined' && !msgInitialized) initMessages();
+  if (page !== 'messages') document.body.classList.remove('msg-thread-open');
   if (page === 'assistant' && typeof astInitialized !== 'undefined' && !astInitialized) initAssistant();
   if (page === 'meds' && typeof medsInitialized !== 'undefined' && !medsInitialized) initMeds();
   if (page === 'profile' && typeof profileInitialized !== 'undefined' && !profileInitialized) initProfile();
@@ -2246,12 +2263,15 @@ function renderMsgConversationList() {
     ? `${filtered.length} of ${msgConversations.length} conversations · ${msgAllMessages.length} messages`
     : `${msgConversations.length} conversations · ${msgAllMessages.length} messages`;
 
-  const parts = filtered.map(c => {
+  const parts = filtered.map((c, i) => {
     const latest = c.msgs[c.msgs.length - 1];
     const body = msgFieldText(latest, 'payload.0.contentString');
     const snippet = body.replace(/\s+/g, ' ').slice(0, 80);
     const isActive = c.key === msgSelectedThreadKey;
-    return `<div class="msg-conv${isActive ? ' active' : ''}" onclick="openMsgConversation(${JSON.stringify(c.key)})">
+    // Use data-i + addEventListener (below) instead of an inline onclick
+    // attribute — c.key contains pipes and may contain quotes that
+    // break HTML attribute parsing when JSON-stringified inline.
+    return `<div class="msg-conv${isActive ? ' active' : ''}" data-i="${i}">
       <div class="msg-conv-top">
         <span class="msg-conv-name">${escapeHtml(c.otherParty || '(unknown)')}</span>
         <span class="msg-conv-date">${escapeHtml(fmtMsgListDate(c.latestSent))}</span>
@@ -2266,6 +2286,18 @@ function renderMsgConversationList() {
     </div>`;
   });
   listEl.innerHTML = parts.join('') || '<div style="padding:14px;color:#888;font-size:12px;">No conversations match.</div>';
+  listEl.querySelectorAll('.msg-conv').forEach(el => {
+    el.addEventListener('click', () => {
+      const i = parseInt(el.dataset.i, 10);
+      openMsgConversation(filtered[i].key);
+    });
+  });
+}
+
+function closeMsgThread() {
+  document.body.classList.remove('msg-thread-open');
+  msgSelectedThreadKey = null;
+  renderMsgConversationList();
 }
 
 function openMsgConversation(key) {
@@ -2273,12 +2305,15 @@ function openMsgConversation(key) {
   const conv = msgConversations.find(c => c.key === key);
   if (!conv) return;
   renderMsgConversationList();  // re-render to update active state
+  document.body.classList.add('msg-thread-open');  // mobile: switch panes
 
   document.getElementById('msg-thread-empty').style.display = 'none';
   const threadEl = document.getElementById('msg-thread');
   threadEl.style.display = '';
 
-  document.getElementById('msg-thread-header').innerHTML = `
+  const headerEl = document.getElementById('msg-thread-header');
+  headerEl.innerHTML = `
+    <button class="msg-back-btn" onclick="closeMsgThread()">← Back to conversations</button>
     <h2>${escapeHtml(conv.subject || '(no subject)')}</h2>
     <div class="msg-thread-meta">${escapeHtml(conv.otherParty)} · ${conv.count} message${conv.count === 1 ? '' : 's'}</div>
   `;
