@@ -346,6 +346,13 @@ class ScrapeJobs {
     }
   }
 
+  // Outer safety net — any uncaught exception inside the body (e.g. a
+  // ReferenceError from a typo, a future TDZ bug, a missing-property
+  // access against a moved DOM) gets reported as a structured error
+  // instead of leaving Dart to time out at 60s with no diag fields.
+  // Without this, a one-character typo silently burns the whole batch.
+  try {
+
   function findRows() {
     // Lenient selector: matches both absolute (/signedin/messages/detail/...)
     // and relative (/messages/detail/...) href attributes. a.href getter
@@ -402,6 +409,14 @@ class ScrapeJobs {
       return true;
     });
   }
+
+  // Resolve the current folder up-front. The primer + diagnostics
+  // reference `folder` before the poll loop runs, so it must be in
+  // scope here, not declared later (const has a TDZ — touching it
+  // before the declaration throws ReferenceError and kills the whole
+  // script silently, then Dart waits for an emit that never fires).
+  const __folderMatch = location.pathname.match(/\\/messages\\/(inbox|outbox)/);
+  const folder = __folderMatch ? __folderMatch[1] : 'unknown';
 
   // ── XHR + fetch interception ─────────────────────────────────
   // Capture the URLs of every network call the SPA makes during the
@@ -565,8 +580,7 @@ class ScrapeJobs {
     await new Promise(r => setTimeout(r, 500));
   }
 
-  const folderMatch = location.pathname.match(/\\/messages\\/(inbox|outbox)/);
-  const folder = folderMatch ? folderMatch[1] : 'unknown';
+  // (folder is already resolved at the top of the script — see above.)
 
   // Pagination detection: look for a "Next" affordance. Epic typically
   // uses either a numbered pager or a Next link/button. We capture both
@@ -736,6 +750,20 @@ class ScrapeJobs {
     // to keep the discovery JSON manageable on successful pages.
     bodyHTMLSnippet: rows.length === 0 ? bodyHTMLSnippet : null,
   });
+  } catch (e) {
+    emit({
+      url: location.href,
+      pathname: location.pathname,
+      folder: (typeof folder === 'string') ? folder : 'unknown',
+      rowCount: 0,
+      rows: [],
+      error: 'js-exception',
+      jsError: {
+        message: (e && e.message) ? String(e.message).slice(0, 300) : String(e).slice(0, 300),
+        stack: (e && e.stack) ? String(e.stack).slice(0, 1500) : '',
+      },
+    });
+  }
 })();
 ''';
   }
