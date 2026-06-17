@@ -258,6 +258,42 @@
   .status-item { display: flex; align-items: center; gap: 2px; }
   .status-issue { color: #c33; font-weight: 500; }
 
+  /* ── Messages page ── */
+  .msg-layout { display: flex; gap: 16px; min-height: calc(100vh - 130px); align-items: stretch; }
+  .msg-list-pane { width: 340px; flex-shrink: 0; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); display: flex; flex-direction: column; max-height: calc(100vh - 130px); overflow: hidden; }
+  .msg-list-header { padding: 12px; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 6px; }
+  .msg-list-header input { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; }
+  .msg-list-stats { font-size: 11px; color: #888; }
+  .msg-list { flex: 1; overflow-y: auto; }
+  .msg-conv { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+  .msg-conv:hover { background: #f8f9fb; }
+  .msg-conv.active { background: #e8f1f8; border-left: 3px solid #4889ad; padding-left: 9px; }
+  .msg-conv-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .msg-conv-name { font-weight: 600; font-size: 13px; color: #1a1a2e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-conv-date { font-size: 11px; color: #888; flex-shrink: 0; }
+  .msg-conv-subject { font-size: 12px; color: #444; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-conv-snippet { font-size: 11px; color: #888; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-conv-meta { font-size: 10px; color: #aaa; margin-top: 3px; display: flex; gap: 8px; }
+  .msg-conv-badge { display: inline-block; padding: 1px 5px; border-radius: 8px; background: #e0e8ee; color: #4889ad; font-size: 10px; font-weight: 500; }
+
+  .msg-thread-pane { flex: 1; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); display: flex; flex-direction: column; max-height: calc(100vh - 130px); overflow: hidden; }
+  .msg-thread-empty { padding: 40px; color: #999; text-align: center; font-size: 13px; margin: auto; }
+  .msg-thread { display: flex; flex-direction: column; height: 100%; }
+  .msg-thread-header { padding: 14px 18px; border-bottom: 1px solid #eee; }
+  .msg-thread-header h2 { margin: 0 0 4px 0; font-size: 15px; color: #1a1a2e; }
+  .msg-thread-header .msg-thread-meta { font-size: 12px; color: #666; }
+  .msg-thread-bubbles { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; background: #f6f7f9; }
+
+  .msg-bubble { max-width: 75%; padding: 9px 12px; border-radius: 10px; font-size: 13px; line-height: 1.4; }
+  .msg-bubble.inbound { align-self: flex-start; background: #ffffff; border: 1px solid #e0e0e0; }
+  .msg-bubble.outbound { align-self: flex-end; background: #4889ad; color: #ffffff; }
+  .msg-bubble .msg-bubble-sender { font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 4px; }
+  .msg-bubble .msg-bubble-body { white-space: pre-wrap; word-wrap: break-word; }
+  .msg-bubble .msg-bubble-time { font-size: 10px; opacity: 0.7; margin-top: 5px; }
+  .msg-bubble.inbound .msg-bubble-sender { color: #4889ad; }
+  .msg-bubble.inbound .msg-bubble-time { color: #888; }
+  .msg-bubble.outbound .msg-bubble-time { color: rgba(255,255,255,0.85); }
+
   /* ── Timeline page ── */
   .tl-layout { display: flex; gap: 0; min-height: calc(100vh - 130px); }
 
@@ -1123,6 +1159,7 @@
     nav a[data-page="meds"]      { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath stroke='%234889ad' d='m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z'/%3E%3Cpath stroke='%237ab44f' stroke-width='2.5' d='m8.5 8.5 7 7'/%3E%3C/svg%3E"); }
     nav a[data-page="profile"]   { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle stroke='%237ab44f' cx='12' cy='7' r='4'/%3E%3Cpath stroke='%234889ad' d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'/%3E%3C/svg%3E"); }
     nav a[data-page="timeline"]  { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline stroke='%237ab44f' points='22 7 13.5 15.5 8.5 10.5 2 17'/%3E%3Cpolyline stroke='%234889ad' points='16 7 22 7 22 13'/%3E%3C/svg%3E"); }
+    nav a[data-page="messages"]  { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath stroke='%234889ad' d='M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z'/%3E%3Cline stroke='%237ab44f' x1='8' y1='10' x2='16' y2='10'/%3E%3Cline stroke='%237ab44f' x1='8' y1='14' x2='13' y2='14'/%3E%3C/svg%3E"); }
     nav a[data-page="search"]    { --icon: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle stroke='%234889ad' cx='11' cy='11' r='8'/%3E%3Cline stroke='%237ab44f' x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E"); }
 
     /* ── Status bar: bar is single-line collapsed by default everywhere now.
@@ -1308,7 +1345,7 @@
   <a href="#" class="active" data-page="home">Home</a>
   <a href="#" data-page="assistant"><span class="ast-name">Assistant</span></a>
   <a href="#" data-page="meds">Meds</a>
-  <a href="#" data-page="timeline">Timeline</a>
+  <a href="#" data-page="messages">Messages</a>
   <a href="#" data-page="search">Search</a>
   <a href="#" data-page="profile">Me</a>
 </nav>
@@ -1444,6 +1481,29 @@
     </div>
   </div>
   <div id="search-results"></div>
+</div>
+
+<!-- ═══════════════ MESSAGES PAGE ═══════════════ -->
+<div id="page-messages" class="page">
+  <div class="msg-layout">
+    <aside class="msg-list-pane">
+      <div class="msg-list-header">
+        <input type="text" id="msg-filter" placeholder="Filter conversations…"
+               oninput="renderMsgConversationList()">
+        <div class="msg-list-stats" id="msg-list-stats"></div>
+      </div>
+      <div class="msg-list" id="msg-list"></div>
+    </aside>
+    <section class="msg-thread-pane" id="msg-thread-pane">
+      <div class="msg-thread-empty" id="msg-thread-empty">
+        Select a conversation to view the thread.
+      </div>
+      <div class="msg-thread" id="msg-thread" style="display:none;">
+        <div class="msg-thread-header" id="msg-thread-header"></div>
+        <div class="msg-thread-bubbles" id="msg-thread-bubbles"></div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <!-- ═══════════════ TIMELINE PAGE ═══════════════ -->
@@ -1742,6 +1802,7 @@ function showPage(page) {
   const navLink = document.querySelector(`nav a[data-page="${page}"]`);
   if (navLink) navLink.classList.add('active');
   if (page === 'timeline' && typeof tlInitialized !== 'undefined' && !tlInitialized) initTimeline();
+  if (page === 'messages' && typeof msgInitialized !== 'undefined' && !msgInitialized) initMessages();
   if (page === 'assistant' && typeof astInitialized !== 'undefined' && !astInitialized) initAssistant();
   if (page === 'meds' && typeof medsInitialized !== 'undefined' && !medsInitialized) initMeds();
   if (page === 'profile' && typeof profileInitialized !== 'undefined' && !profileInitialized) initProfile();
@@ -2045,6 +2106,199 @@ function fmtDate(d) {
     return dt.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) +
       (d.includes('T') ? ' ' + dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '');
   } catch (e) { return d; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Messages page — Stanford message threads from v2 HAPI
+// ═══════════════════════════════════════════════════════════════
+
+let msgInitialized = false;
+let msgAllMessages = [];         // raw Communication resources
+let msgConversations = [];       // grouped + sorted by latest
+let msgSelectedThreadKey = null;
+const MSG_PATIENT_DISPLAY = 'Uri Sarid';
+
+async function initMessages() {
+  msgInitialized = true;
+  const listEl = document.getElementById('msg-list');
+  listEl.innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">Loading messages…</div>';
+  try {
+    // Paginated fetch of every stanford-msg Communication.
+    const all = [];
+    let next = '/fhir/Communication?identifier=' +
+               encodeURIComponent('urn:stanford:myhealth:message|') +
+               '&_count=200';
+    while (next) {
+      const resp = await fetch(next);
+      if (!resp.ok) throw new Error(`HAPI ${resp.status}`);
+      const bundle = await resp.json();
+      for (const e of (bundle.entry || [])) {
+        if (e.resource) all.push(e.resource);
+      }
+      next = null;
+      for (const link of (bundle.link || [])) {
+        if (link.relation === 'next' && link.url) {
+          // Convert absolute → relative path so nginx proxies it
+          const u = new URL(link.url);
+          next = u.pathname + u.search;
+          if (!next.startsWith('/fhir')) next = '/fhir' + next;
+          break;
+        }
+      }
+    }
+    msgAllMessages = all;
+    msgGroupAndSort();
+    renderMsgConversationList();
+  } catch (e) {
+    listEl.innerHTML = `<div style="padding:14px;color:#c33;font-size:12px;">Failed to load: ${e.message}</div>`;
+  }
+}
+
+function msgFieldText(comm, path) {
+  const parts = path.split('.');
+  let v = comm;
+  for (const p of parts) { if (v == null) return ''; v = v[p]; }
+  return v == null ? '' : String(v);
+}
+
+function msgThreadKey(comm) {
+  for (const ext of (comm.extension || [])) {
+    if (ext.url === 'http://binahealth.org/ns/thread-key') return ext.valueString || '';
+  }
+  return '';
+}
+
+function msgFolder(comm) {
+  for (const tag of ((comm.meta || {}).tag || [])) {
+    if (tag.system === 'http://binahealth.org/ns/src-folder' &&
+        (tag.code === 'inbox' || tag.code === 'outbox')) return tag.code;
+  }
+  return 'unknown';
+}
+
+function msgOtherParty(comm) {
+  const folder = msgFolder(comm);
+  if (folder === 'outbox') {
+    return (comm.recipient && comm.recipient[0] && comm.recipient[0].display) || '';
+  }
+  return (comm.sender && comm.sender.display) || '';
+}
+
+function msgGroupAndSort() {
+  const byKey = new Map();
+  for (const c of msgAllMessages) {
+    const k = msgThreadKey(c) || `__solo:${c.id}`;
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(c);
+  }
+  msgConversations = [];
+  for (const [key, msgs] of byKey) {
+    msgs.sort((a, b) => (a.sent || '').localeCompare(b.sent || ''));
+    const latest = msgs[msgs.length - 1];
+    const otherParty = msgOtherParty(latest);
+    const subject = ((latest.topic || {}).text || '').trim();
+    msgConversations.push({
+      key, msgs,
+      latestSent: latest.sent || '',
+      otherParty,
+      subject,
+      count: msgs.length,
+      inboxCount: msgs.filter(m => msgFolder(m) === 'inbox').length,
+      outboxCount: msgs.filter(m => msgFolder(m) === 'outbox').length,
+    });
+  }
+  msgConversations.sort((a, b) => b.latestSent.localeCompare(a.latestSent));
+}
+
+function fmtMsgListDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso.slice(0, 10);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString('en-US', sameYear
+    ? { month: 'short', day: 'numeric' }
+    : { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function fmtMsgBubbleDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function renderMsgConversationList() {
+  const listEl = document.getElementById('msg-list');
+  const statsEl = document.getElementById('msg-list-stats');
+  const filterEl = document.getElementById('msg-filter');
+  const q = (filterEl ? filterEl.value : '').trim().toLowerCase();
+
+  const filtered = q
+    ? msgConversations.filter(c =>
+        c.otherParty.toLowerCase().includes(q) ||
+        c.subject.toLowerCase().includes(q))
+    : msgConversations;
+
+  statsEl.textContent = q
+    ? `${filtered.length} of ${msgConversations.length} conversations · ${msgAllMessages.length} messages`
+    : `${msgConversations.length} conversations · ${msgAllMessages.length} messages`;
+
+  const parts = filtered.map(c => {
+    const latest = c.msgs[c.msgs.length - 1];
+    const body = msgFieldText(latest, 'payload.0.contentString');
+    const snippet = body.replace(/\s+/g, ' ').slice(0, 80);
+    const isActive = c.key === msgSelectedThreadKey;
+    return `<div class="msg-conv${isActive ? ' active' : ''}" onclick="openMsgConversation(${JSON.stringify(c.key)})">
+      <div class="msg-conv-top">
+        <span class="msg-conv-name">${escapeHtml(c.otherParty || '(unknown)')}</span>
+        <span class="msg-conv-date">${escapeHtml(fmtMsgListDate(c.latestSent))}</span>
+      </div>
+      <div class="msg-conv-subject">${escapeHtml(c.subject || '(no subject)')}</div>
+      <div class="msg-conv-snippet">${escapeHtml(snippet)}</div>
+      <div class="msg-conv-meta">
+        <span class="msg-conv-badge">${c.count} msg</span>
+        ${c.inboxCount > 0 ? `<span>↓ ${c.inboxCount}</span>` : ''}
+        ${c.outboxCount > 0 ? `<span>↑ ${c.outboxCount}</span>` : ''}
+      </div>
+    </div>`;
+  });
+  listEl.innerHTML = parts.join('') || '<div style="padding:14px;color:#888;font-size:12px;">No conversations match.</div>';
+}
+
+function openMsgConversation(key) {
+  msgSelectedThreadKey = key;
+  const conv = msgConversations.find(c => c.key === key);
+  if (!conv) return;
+  renderMsgConversationList();  // re-render to update active state
+
+  document.getElementById('msg-thread-empty').style.display = 'none';
+  const threadEl = document.getElementById('msg-thread');
+  threadEl.style.display = '';
+
+  document.getElementById('msg-thread-header').innerHTML = `
+    <h2>${escapeHtml(conv.subject || '(no subject)')}</h2>
+    <div class="msg-thread-meta">${escapeHtml(conv.otherParty)} · ${conv.count} message${conv.count === 1 ? '' : 's'}</div>
+  `;
+
+  const bubblesEl = document.getElementById('msg-thread-bubbles');
+  bubblesEl.innerHTML = conv.msgs.map(m => {
+    const folder = msgFolder(m);
+    const cls = folder === 'outbox' ? 'outbound' : 'inbound';
+    const sender = (m.sender || {}).display || '(unknown)';
+    const body = msgFieldText(m, 'payload.0.contentString');
+    return `<div class="msg-bubble ${cls}">
+      <div class="msg-bubble-sender">${escapeHtml(sender)}</div>
+      <div class="msg-bubble-body">${escapeHtml(body)}</div>
+      <div class="msg-bubble-time">${escapeHtml(fmtMsgBubbleDate(m.sent || ''))}</div>
+    </div>`;
+  }).join('');
+
+  // Scroll to bottom (most recent message) — the conversation view is
+  // chronological, so newest is at the bottom like a chat app.
+  bubblesEl.scrollTop = bubblesEl.scrollHeight;
 }
 
 // ═══════════════════════════════════════════════════════════════
