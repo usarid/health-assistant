@@ -444,6 +444,124 @@ class ScrapeJobs {
     };
   } catch (_) {}
 
+  // ── Direct API call (primary path) ──────────────────────────────
+  // XHR interception from the prior diag revealed the Stanford SPA
+  // calls these JSON endpoints internally for the message list:
+  //   POST /Private/Ajax/V1/Mailbox/Page  (inbox)
+  //   POST /Private/Ajax/V1/Outbox/Page   (sent)
+  // The session cookies are already on the wrapper origin (myhealth.*),
+  // so we can call them ourselves with credentials: 'include'. No SPA,
+  // no iframe, no DOM. This bypasses the entire SPA-not-rendering
+  // problem we hit on direct-loadUrl.
+  //
+  // Response shape is unknown — try a few common Epic conventions for
+  // pulling messages out of the JSON, and fall back to dumping the
+  // top-level structure into the diag if none of them match.
+  async function fetchListViaAPI() {
+    const endpoint = folder === 'inbox'
+      ? '/Private/Ajax/V1/Mailbox/Page'
+      : '/Private/Ajax/V1/Outbox/Page';
+    try {
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        body: JSON.stringify({}),
+      });
+      const text = await resp.text();
+      let data;
+      try { data = JSON.parse(text); }
+      catch (e) {
+        return { ok: false, status: resp.status, error: 'json-parse-failed',
+                 sample: text.slice(0, 500) };
+      }
+      return { ok: resp.ok, status: resp.status, data };
+    } catch (e) {
+      return { ok: false, error: 'fetch-failed', message: (e && e.message) || '' };
+    }
+  }
+
+  // PHI-safe structural snapshot of an arbitrary JSON value — top-level
+  // keys, array lengths, first-item keys if applicable. NO values.
+  function describeShape(v, depth) {
+    depth = depth || 0;
+    if (depth > 3) return { truncated: true };
+    if (v === null) return { type: 'null' };
+    if (Array.isArray(v)) {
+      return { type: 'array', length: v.length,
+               firstItem: v.length > 0 ? describeShape(v[0], depth + 1) : null };
+    }
+    if (typeof v === 'object') {
+      const keys = Object.keys(v);
+      const out = { type: 'object', keys: keys.slice(0, 30) };
+      // Recurse one level into object values to find arrays of messages
+      if (depth === 0) {
+        out.children = {};
+        for (const k of keys.slice(0, 30)) {
+          out.children[k] = describeShape(v[k], depth + 1);
+        }
+      }
+      return out;
+    }
+    return { type: typeof v };
+  }
+
+  // Try to extract message rows from various plausible response shapes.
+  // Returns null if nothing matched, or an array of {id, subject, ...}.
+  function extractRowsFromApiResponse(data) {
+    if (!data || typeof data !== 'object') return null;
+    // Candidate paths to the message list (try in order)
+    const candidates = [
+      data.Messages, data.messages,
+      data.Items, data.items,
+      data.Results, data.results,
+      data.Data, data.data,
+      data.Mailbox && data.Mailbox.Messages,
+      data.Outbox && data.Outbox.Messages,
+      data.Page && data.Page.Messages,
+      data.Page && data.Page.Items,
+      Array.isArray(data) ? data : null,
+    ].filter(c => Array.isArray(c) && c.length >= 0);
+    if (candidates.length === 0) return null;
+    const arr = candidates[0];
+    return arr.map(m => {
+      // Try common field names — Epic uses MixedCase
+      const id = m.Id || m.ID || m.MessageId || m.MessageID || m.id || '';
+      const subject = m.Subject || m.subject || m.Title || m.title || '';
+      const otherParty = m.From || m.from || m.Sender || m.sender
+                      || m.To || m.to || m.Recipient || m.recipient
+                      || (m.Provider && (m.Provider.Name || m.Provider.DisplayName))
+                      || '';
+      const date = m.Date || m.SentDate || m.ReceivedDate
+                || m.sent || m.received || m.timestamp || '';
+      const isUnread = !!(m.IsUnread || m.Unread || m.unread || m.isUnread);
+      const isReply = /^re\\b/i.test(String(subject));
+      return {
+        folder,
+        id: String(id),
+        subject: String(subject),
+        otherParty: typeof otherParty === 'string' ? otherParty : JSON.stringify(otherParty),
+        date: String(date),
+        isUnread,
+        isReply,
+      };
+    }).filter(r => r.id);  // drop entries where we couldn't find an ID
+  }
+
+  // Make the API call NOW, before priming the SPA — if it works we're
+  // done in <1s and the SPA priming is moot.
+  const apiResult = await fetchListViaAPI();
+  let apiRows = null;
+  let apiShape = null;
+  if (apiResult.ok && apiResult.data) {
+    apiRows = extractRowsFromApiResponse(apiResult.data);
+    apiShape = describeShape(apiResult.data);
+  }
+
   // ── In-app nav primer ─────────────────────────────────────────
   // 30s direct-loadUrl poll proved the Stanford SPA is inert under
   // direct deep-linking: bodyLength stayed at 7.5KB, zero XHRs, zero
@@ -516,12 +634,12 @@ class ScrapeJobs {
 
   // ── Long poll: track iframe appearances, attempt to dismiss any
   // interstitial modal/banner, find rows when they appear ──────
-  // 30s window. Successful nav-and-render of list should resolve
-  // long before this; the budget is for slow iframe mount + interstitial.
-  let rows = [];
+  // 30s window. Skipped entirely if the direct API call already
+  // returned rows (the common-case fast path).
+  let rows = apiRows && apiRows.length > 0 ? apiRows : [];
   const iframeAppearances = [];
   let dismissAttempts = 0;
-  while (Date.now() - t0 < 30000) {
+  while (rows.length === 0 && Date.now() - t0 < 30000) {
     rows = findRows();
     if (rows.length > 0) break;
 
@@ -743,6 +861,18 @@ class ScrapeJobs {
     dismissAttempts,
     primerEvents,
     xhrLog,
+    // Direct-API path results — structural-only describeShape; never
+    // includes message text/sender/dates so the diag file stays as
+    // PHI-light as the DOM-path emit was.
+    api: {
+      status: apiResult.status || null,
+      ok: apiResult.ok || false,
+      error: apiResult.error || null,
+      rowsExtracted: apiRows ? apiRows.length : 0,
+      shape: apiShape,
+      sample: apiResult.sample || null,
+    },
+    rowSource: (apiRows && apiRows.length > 0) ? 'api' : (rows.length > 0 ? 'dom' : null),
     firstRowParse,
     error: rows.length === 0 ? 'no-rows-found' : null,
     diagnostics: structuralDiag,
