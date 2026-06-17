@@ -337,9 +337,16 @@ class ScrapeJobs {
   /// Robust to either `<tr>` table rows or `<li>` list rows — selectors
   /// fall back across both. Polls for up to 8s for rows to appear (Epic
   /// SPA mount latency).
-  static String stanfordMessageList() {
+  /// [cursor] is Stanford's `nextPageBeginMessageId` from a prior page's
+  /// response — pass it on subsequent pages to get the next slice via
+  /// cursor-based pagination. Null/omitted on the first page.
+  static String stanfordMessageList({String? cursor}) {
+    final cursorJs = cursor == null
+        ? 'null'
+        : "'${cursor.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
     return '''
 (async () => {
+  const cursor = $cursorJs;
   function emit(payload) {
     if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
       window.flutter_inappwebview.callHandler('messageList', payload);
@@ -484,10 +491,34 @@ class ScrapeJobs {
   // Response shape is unknown — try a few common Epic conventions for
   // pulling messages out of the JSON, and fall back to dumping the
   // top-level structure into the diag if none of them match.
-  async function fetchListViaAPI() {
-    const endpoint = folder === 'inbox'
-      ? '/Private/Ajax/V1/Mailbox/Page'
-      : '/Private/Ajax/V1/Outbox/Page';
+  // Cycle through plausible request-body shapes — Stanford's endpoint
+  // accepts {} for outbox but returns empty for inbox. We don't yet
+  // know which body the SPA itself sends for inbox (the XHR body
+  // capture didn't fire because we short-circuit before the primer).
+  // Each candidate is tried in sequence; first one that returns rows
+  // wins. Cursor pagination overrides the body entirely.
+  function bodyCandidatesFor(folder, cursor) {
+    if (cursor) {
+      return [
+        { beginMessageId: cursor },
+        { nextPageBeginMessageId: cursor },
+        { currentPageBeginMessageId: cursor },
+      ];
+    }
+    if (folder === 'inbox') {
+      return [
+        {},
+        { folder: 'Inbox' },
+        { folderName: 'Inbox' },
+        { mailboxFolderId: 1 },
+        { mailboxFolderId: 0 },
+        { includeRead: true, includeUnread: true },
+      ];
+    }
+    return [{}];
+  }
+
+  async function fetchOnce(endpoint, body) {
     try {
       const resp = await fetch(endpoint, {
         method: 'POST',
@@ -497,19 +528,40 @@ class ScrapeJobs {
           'Accept': 'application/json',
           'X-Requested-With': 'XMLHttpRequest',
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify(body),
       });
       const text = await resp.text();
-      let data;
-      try { data = JSON.parse(text); }
-      catch (e) {
-        return { ok: false, status: resp.status, error: 'json-parse-failed',
-                 sample: text.slice(0, 500) };
-      }
-      return { ok: resp.ok, status: resp.status, data };
+      try { return { ok: resp.ok, status: resp.status, data: JSON.parse(text) }; }
+      catch (e) { return { ok: false, status: resp.status, error: 'json-parse-failed',
+                            sample: text.slice(0, 500) }; }
     } catch (e) {
       return { ok: false, error: 'fetch-failed', message: (e && e.message) || '' };
     }
+  }
+
+  async function fetchListViaAPI() {
+    const endpoint = folder === 'inbox'
+      ? '/Private/Ajax/V1/Mailbox/Page'
+      : '/Private/Ajax/V1/Outbox/Page';
+    const candidates = bodyCandidatesFor(folder, cursor);
+    const attempts = [];
+    let lastSuccess = null;
+    for (const body of candidates) {
+      const t0attempt = Date.now();
+      const r = await fetchOnce(endpoint, body);
+      const rows = (r.ok && r.data) ? extractRowsFromApiResponse(r.data) : null;
+      attempts.push({
+        body, status: r.status || null, ok: r.ok || false,
+        rowsExtracted: rows ? rows.length : 0,
+        elapsedMs: Date.now() - t0attempt,
+      });
+      if (r.ok) lastSuccess = { result: r, rows };
+      if (rows && rows.length > 0) return { ...lastSuccess.result, rows, attempts };
+    }
+    // No candidate produced rows. Return the last successful response
+    // (for shape diagnostics) or the last failure.
+    if (lastSuccess) return { ...lastSuccess.result, rows: lastSuccess.rows, attempts };
+    return { ...attempts[attempts.length - 1], rows: null, attempts };
   }
 
   // PHI-safe structural snapshot of an arbitrary JSON value — keys,
@@ -592,12 +644,15 @@ class ScrapeJobs {
   const apiStart = Date.now();
   const apiResult = await fetchListViaAPI();
   mark('apiCallMs', Date.now() - apiStart);
-  let apiRows = null;
-  let apiShape = null;
-  if (apiResult.ok && apiResult.data) {
-    apiRows = extractRowsFromApiResponse(apiResult.data);
-    apiShape = describeShape(apiResult.data);
-  }
+  const apiRows = apiResult.rows || null;
+  const apiShape = (apiResult.ok && apiResult.data) ? describeShape(apiResult.data) : null;
+
+  // Extract the next-page cursor from Stanford's response (when present).
+  // Outbox always carries currentPageBeginMessageId / nextPageBeginMessageId
+  // when more pages exist; inbox may or may not.
+  const mp = apiResult.data && apiResult.data.myHealthMailboxPage;
+  const nextCursor = (mp && mp.more && mp.nextPageBeginMessageId)
+    ? mp.nextPageBeginMessageId : null;
 
   // SHORT-CIRCUIT: if the API call succeeded (HTTP 200), trust its
   // answer — even if it returned 0 rows. The SPA priming + 30s DOM
@@ -612,12 +667,11 @@ class ScrapeJobs {
       folder,
       rowCount: (apiRows || []).length,
       rows: apiRows || [],
-      pagination: { hasNext: false },   // direct-API path uses cursor pagination at Dart layer (next commit)
+      nextCursor,
+      pagination: { hasNext: !!nextCursor, nextCursor },
       pollMs: 0,
       pollTimedOut: false,
       pageTitle: document.title,
-      headings: Array.from(document.querySelectorAll('h1, h2'))
-        .slice(0, 3).map(h => (h.textContent || '').trim().slice(0, 60)),
       bodyLength: (document.body?.textContent || '').length,
       xhrLog,
       api: {
@@ -625,6 +679,8 @@ class ScrapeJobs {
         ok: true,
         rowsExtracted: (apiRows || []).length,
         shape: apiShape,
+        attempts: apiResult.attempts || null,
+        more: !!(mp && mp.more),
       },
       rowSource: (apiRows && apiRows.length > 0) ? 'api' : 'api-empty',
       timings,

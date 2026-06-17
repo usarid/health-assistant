@@ -766,17 +766,25 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
             : StanfordConfig.messageOutboxUrl;
         final seenIds = <String>{};
         int page = 1;
-        int newRowsThisPage = -1;
-        while (newRowsThisPage != 0 && page <= 80 && !_abortRequested) {
-          final url = page == 1 ? baseUrl : '$baseUrl?page=$page';
+        // Cursor pagination: Stanford's response carries `nextPageBeginMessageId`
+        // when more pages exist. Pass it back in the next request's body
+        // (the JS handles the actual body shape). The old `?page=N` URL
+        // pattern was ignored by Stanford — it returned page 1 every time.
+        String? cursor;
+        bool keepGoing = true;
+        while (keepGoing && page <= 80 && !_abortRequested) {
           setState(() => _status =
               'Discovering $folder page $page (collected ${allRows.length})…');
           final t0 = DateTime.now();
-          final res = await _scrapeMessageListPage(url);
+          // Skip the URL load on pages 2+ — we're already on the folder
+          // page from p1; cursor is in the API body, not the URL.
+          final res = await _scrapeMessageListPage(
+            baseUrl,
+            skipNav: page > 1,
+            cursor: cursor,
+          );
           final elapsedMs = DateTime.now().difference(t0).inMilliseconds;
 
-          // Capture landed URL from controller — tells us if Stanford
-          // redirected us away from the URL we asked for.
           String landedUrl = '';
           try { landedUrl = (await _ctrl!.getUrl())?.toString() ?? ''; }
           catch (_) {}
@@ -784,11 +792,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           final report = <String, dynamic>{
             'folder': folder,
             'page': page,
-            'requestedUrl': url,
+            'requestedUrl': baseUrl,
+            'cursorIn': cursor,
             'landedUrl': landedUrl,
             'elapsedMs': elapsedMs,
-            // Everything the JS emitted (minus the rows themselves — too
-            // bulky and saved separately at the top level).
             ...?res?.map((k, v) => MapEntry(k, k == 'rows' ? null : v)),
           };
           pageReports.add(report);
@@ -803,7 +810,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
             meta['errors'].add('$folder p1: $err');
             break;
           }
-          newRowsThisPage = 0;
+          int newRowsThisPage = 0;
           for (final r in rows) {
             if (r is! Map) continue;
             final id = r['id']?.toString();
@@ -816,7 +823,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           }
           meta['${folder}Pages'] = page;
           meta['${folder}RowCount'] = seenIds.length;
-          if (newRowsThisPage == 0) break;
+
+          // Advance via Stanford's cursor; stop if the server says no more
+          // pages, the new page gave us only duplicates, or it's empty.
+          cursor = res['nextCursor']?.toString();
+          if (cursor == null || newRowsThisPage == 0) {
+            keepGoing = false;
+            break;
+          }
           page += 1;
         }
       }
@@ -842,45 +856,58 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   /// Returns the JS payload with a `dartTimings` field added — per-phase
   /// breakdown (navMs / settleMs / jsMs / totalMs) so we can tell where
   /// each second goes between Dart-side waits and JS-side work.
-  Future<Map<String, dynamic>?> _scrapeMessageListPage(String url) async {
+  /// Load (optionally) + inject the message-list scraper.
+  ///
+  /// [skipNav] true → don't reload the URL; reuse the current page.
+  ///   Used for pages 2+ of the same folder (cursor pagination): the
+  ///   API call is a same-origin XHR that doesn't care about the
+  ///   visible URL, so re-navigating wastes a network round-trip.
+  /// [cursor] → Stanford's `nextPageBeginMessageId` for cursor pagination.
+  ///
+  /// Removes the 2s Dart-side settle that earlier versions added "for
+  /// SPA mount" — the API endpoint accepts requests the moment the
+  /// session cookie is valid, which is true by the time onLoadStop
+  /// fires. Saves ~2s × N pages.
+  Future<Map<String, dynamic>?> _scrapeMessageListPage(
+    String url, {
+    bool skipNav = false,
+    String? cursor,
+  }) async {
     final stopwatch = Stopwatch()..start();
     final phases = <String, int>{};
 
-    _navCompleter = Completer<void>();
-    try {
-      await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
-    } catch (_) {
-      return {'dartTimings': {'totalMs': stopwatch.elapsedMilliseconds}, 'error': 'loadUrl-threw'};
+    if (!skipNav) {
+      _navCompleter = Completer<void>();
+      try {
+        await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
+      } catch (_) {
+        return {'dartTimings': {'totalMs': stopwatch.elapsedMilliseconds}, 'error': 'loadUrl-threw'};
+      }
+      final navStart = stopwatch.elapsedMilliseconds;
+      try {
+        await _navCompleter!.future.timeout(const Duration(seconds: 20));
+      } on TimeoutException {
+        return {
+          'dartTimings': {'navMs': stopwatch.elapsedMilliseconds - navStart, 'totalMs': stopwatch.elapsedMilliseconds},
+          'error': 'nav-timeout',
+        };
+      }
+      phases['navMs'] = stopwatch.elapsedMilliseconds - navStart;
+    } else {
+      phases['navMs'] = 0;
     }
-    final navStart = stopwatch.elapsedMilliseconds;
-    try {
-      await _navCompleter!.future.timeout(const Duration(seconds: 20));
-    } on TimeoutException {
-      return {
-        'dartTimings': {'navMs': stopwatch.elapsedMilliseconds - navStart, 'totalMs': stopwatch.elapsedMilliseconds},
-        'error': 'nav-timeout',
-      };
-    }
-    phases['navMs'] = stopwatch.elapsedMilliseconds - navStart;
-
-    // Brief settle for the SPA — the JS itself polls internally, so a
-    // short Dart-side delay here is enough.
-    final settleStart = stopwatch.elapsedMilliseconds;
-    await Future.delayed(const Duration(seconds: 2));
-    phases['settleMs'] = stopwatch.elapsedMilliseconds - settleStart;
 
     final jsStart = stopwatch.elapsedMilliseconds;
     _messageListCompleter = Completer<Map<String, dynamic>>();
     try {
-      await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordMessageList());
+      await _ctrl!.evaluateJavascript(
+          source: ScrapeJobs.stanfordMessageList(cursor: cursor));
     } catch (e) {
       return {
         'dartTimings': {...phases, 'totalMs': stopwatch.elapsedMilliseconds},
         'error': 'inject-failed: $e',
       };
     }
-    // JS budget: <1s on the API-success path; ~40s worst-case on DOM
-    // fallback. Allow 60s round-trip so the JS always gets to emit.
     Map<String, dynamic> result;
     try {
       result = await _messageListCompleter!.future
