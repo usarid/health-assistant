@@ -308,18 +308,6 @@
   .msg-back-btn { display: none; background: #f1f4f7; border: 1px solid #d0d8e0; color: #4889ad; font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 12px; border-radius: 16px; margin-bottom: 10px; }
   .msg-back-btn:hover { background: #e4eaf0; }
   .msg-back-btn:active { background: #d0d8e0; }
-  /* Floating FAB-style back affordance — used on mobile only. Lives
-     OUTSIDE the thread header so it pins reliably regardless of
-     ancestor overflow / sticky-context quirks in iOS webviews. */
-  .msg-back-fab { display: none; position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); left: 12px; z-index: 100;
-    background: white; border: 1px solid #c5d0db; color: #4889ad;
-    font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 18px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.12); cursor: pointer; }
-  .msg-back-fab:active { background: #f1f4f7; }
-  body.msg-thread-open .msg-back-fab { display: inline-block; }
-  @media (min-width: 801px) {
-    body.msg-thread-open .msg-back-fab { display: none; }
-  }
 
   /* Single-pane mobile layout: <800px viewport shows ONE pane at a
      time. Default state = list visible, thread hidden. Body class
@@ -331,18 +319,27 @@
      (long threads get cut off with no scrollbar). */
   @media (max-width: 800px) {
     .msg-layout { gap: 0; flex-direction: column; min-height: 0; }
+    /* List pane: let the page body scroll normally (it's a vertical list
+       of cards, page-scroll is fine, no header to keep in view). */
     .msg-list-pane { width: 100%; max-height: none; overflow: visible; }
     .msg-list { overflow-y: visible; }
-    .msg-thread-pane { display: none; max-height: none; overflow: visible; }
-    .msg-thread { height: auto; }
-    .msg-thread-bubbles { overflow-y: visible; max-height: none; }
+    /* Thread pane: when open, becomes the scroll container itself.
+       Height is set in JS via fitMessagesPane() — measures the pane's
+       top edge against window.innerHeight, which is the only reliable
+       way to get the visible area in iOS app webviews (100vh and
+       100dvh both behave inconsistently when the webview is embedded
+       inside a native app with its own chrome). Inner flex split:
+       header is flex-shrink:0 (stays at top), bubbles flex:1 +
+       overflow-y:auto (the actual scroll surface). The back button
+       is part of the non-scrolling header, so it's always reachable
+       without needing any sticky/fixed positioning. */
+    .msg-thread-pane { display: none; max-height: none; overflow: hidden; }
     body.msg-thread-open .msg-list-pane { display: none; }
-    body.msg-thread-open .msg-thread-pane { display: flex; }
-    /* In-header back button is hidden on mobile — the .msg-back-fab
-       above replaces it. Sticky-header approach didn't work reliably
-       in the iOS webview (sticky context broken by some ancestor);
-       a fixed-position FAB is unaffected by ancestor overflow rules. */
-    .msg-back-btn { display: none; }
+    body.msg-thread-open .msg-thread-pane { display: flex; flex-direction: column; }
+    body.msg-thread-open .msg-thread { height: auto; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+    body.msg-thread-open .msg-thread-header { flex-shrink: 0; }
+    body.msg-thread-open .msg-thread-bubbles { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; min-height: 0; }
+    .msg-back-btn { display: inline-block; }
   }
 
   /* ── Timeline page ── */
@@ -1536,15 +1533,11 @@
 
 <!-- ═══════════════ MESSAGES PAGE ═══════════════ -->
 <div id="page-messages" class="page">
-  <!-- Floating back-to-list FAB (mobile only, shown via body.msg-thread-open).
-       Lives outside the thread pane so it's position:fixed against the
-       viewport without being affected by ancestor overflow rules. -->
-  <button class="msg-back-fab" type="button" onclick="closeMsgThread()">← Conversations</button>
   <div class="msg-layout">
     <aside class="msg-list-pane">
       <div class="msg-list-header">
         <div class="msg-filter-wrap" id="msg-filter-wrap">
-          <input type="search" id="msg-filter" placeholder="Filter conversations…"
+          <input type="text" id="msg-filter" placeholder="Filter conversations…"
                  oninput="onMsgFilterInput()">
           <button class="msg-filter-clear" type="button"
                   onclick="clearMsgFilter()" title="Clear filter"
@@ -2361,8 +2354,27 @@ function renderMsgConversationList() {
 function closeMsgThread() {
   document.body.classList.remove('msg-thread-open');
   msgSelectedThreadKey = null;
+  const pane = document.querySelector('.msg-thread-pane');
+  if (pane) pane.style.height = '';
   renderMsgConversationList();
 }
+
+/// Measure the thread pane's distance from the top of the viewport and
+/// set its height so it fills exactly the rest of the visible area.
+/// Inner flex layout (header flex-shrink:0 + bubbles flex:1) takes
+/// care of the rest. Re-runs on window resize / orientation change
+/// because both can shift the pane's top edge.
+function fitMessagesPane() {
+  if (window.innerWidth > 800) return;
+  if (!document.body.classList.contains('msg-thread-open')) return;
+  const pane = document.querySelector('.msg-thread-pane');
+  if (!pane) return;
+  const rect = pane.getBoundingClientRect();
+  const avail = window.innerHeight - rect.top;
+  if (avail > 100) pane.style.height = avail + 'px';
+}
+window.addEventListener('resize', fitMessagesPane);
+window.addEventListener('orientationchange', () => setTimeout(fitMessagesPane, 100));
 
 function openMsgConversation(key) {
   msgSelectedThreadKey = key;
@@ -2395,8 +2407,10 @@ function openMsgConversation(key) {
     </div>`;
   }).join('');
 
-  // Scroll to bottom (most recent message) — the conversation view is
-  // chronological, so newest is at the bottom like a chat app.
+  // Size the pane on mobile so the inner flex (header + bubbles)
+  // gets a definite parent height. Then scroll the bubbles container
+  // to its bottom (the most recent message) like a chat app.
+  fitMessagesPane();
   bubblesEl.scrollTop = bubblesEl.scrollHeight;
 }
 
