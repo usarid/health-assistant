@@ -263,7 +263,11 @@
   .msg-list-pane { width: 340px; flex-shrink: 0; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); display: flex; flex-direction: column; max-height: calc(100vh - 130px); overflow: hidden; }
   .msg-list-header { padding: 12px; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 6px; }
   .msg-filter-wrap { position: relative; }
-  .msg-list-header input { width: 100%; padding: 8px 28px 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; box-sizing: border-box; }
+  .msg-list-header input { width: 100%; padding: 8px 28px 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; box-sizing: border-box; -webkit-appearance: none; appearance: none; }
+  /* Suppress the browser's native <input type=search> clear button —
+     iOS/Chrome both render one, which collides with our custom × */
+  .msg-list-header input::-webkit-search-cancel-button,
+  .msg-list-header input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
   .msg-filter-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: #d0d0d0; color: white; border: none; width: 18px; height: 18px; border-radius: 50%; font-size: 12px; line-height: 16px; padding: 0; cursor: pointer; display: none; }
   .msg-filter-clear:hover { background: #999; }
   .msg-filter-wrap.has-text .msg-filter-clear { display: block; }
@@ -304,6 +308,18 @@
   .msg-back-btn { display: none; background: #f1f4f7; border: 1px solid #d0d8e0; color: #4889ad; font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 12px; border-radius: 16px; margin-bottom: 10px; }
   .msg-back-btn:hover { background: #e4eaf0; }
   .msg-back-btn:active { background: #d0d8e0; }
+  /* Floating FAB-style back affordance — used on mobile only. Lives
+     OUTSIDE the thread header so it pins reliably regardless of
+     ancestor overflow / sticky-context quirks in iOS webviews. */
+  .msg-back-fab { display: none; position: fixed; top: calc(env(safe-area-inset-top, 0px) + 56px); left: 12px; z-index: 100;
+    background: white; border: 1px solid #c5d0db; color: #4889ad;
+    font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 18px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.12); cursor: pointer; }
+  .msg-back-fab:active { background: #f1f4f7; }
+  body.msg-thread-open .msg-back-fab { display: inline-block; }
+  @media (min-width: 801px) {
+    body.msg-thread-open .msg-back-fab { display: none; }
+  }
 
   /* Single-pane mobile layout: <800px viewport shows ONE pane at a
      time. Default state = list visible, thread hidden. Body class
@@ -322,12 +338,11 @@
     .msg-thread-bubbles { overflow-y: visible; max-height: none; }
     body.msg-thread-open .msg-list-pane { display: none; }
     body.msg-thread-open .msg-thread-pane { display: flex; }
-    .msg-back-btn { display: inline-block; }
-    /* Sticky header so the back button + subject stay reachable while
-       the bubbles scroll. The thread pane has overflow:visible on
-       mobile so this sticks against the page (viewport top), not
-       against a scroll container. */
-    .msg-thread-header { position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+    /* In-header back button is hidden on mobile — the .msg-back-fab
+       above replaces it. Sticky-header approach didn't work reliably
+       in the iOS webview (sticky context broken by some ancestor);
+       a fixed-position FAB is unaffected by ancestor overflow rules. */
+    .msg-back-btn { display: none; }
   }
 
   /* ── Timeline page ── */
@@ -1521,6 +1536,10 @@
 
 <!-- ═══════════════ MESSAGES PAGE ═══════════════ -->
 <div id="page-messages" class="page">
+  <!-- Floating back-to-list FAB (mobile only, shown via body.msg-thread-open).
+       Lives outside the thread pane so it's position:fixed against the
+       viewport without being affected by ancestor overflow rules. -->
+  <button class="msg-back-fab" type="button" onclick="closeMsgThread()">← Conversations</button>
   <div class="msg-layout">
     <aside class="msg-list-pane">
       <div class="msg-list-header">
