@@ -485,8 +485,11 @@ class ScrapeJobs {
     }
   }
 
-  // PHI-safe structural snapshot of an arbitrary JSON value — top-level
-  // keys, array lengths, first-item keys if applicable. NO values.
+  // PHI-safe structural snapshot of an arbitrary JSON value — keys,
+  // array lengths, first-item keys if applicable. NO values, no message
+  // text, no sender names. Recurses 3 levels deep so we can see all the
+  // way down to messageList[0]'s field names, which is what we need to
+  // map onto our row shape.
   function describeShape(v, depth) {
     depth = depth || 0;
     if (depth > 3) return { truncated: true };
@@ -498,8 +501,7 @@ class ScrapeJobs {
     if (typeof v === 'object') {
       const keys = Object.keys(v);
       const out = { type: 'object', keys: keys.slice(0, 30) };
-      // Recurse one level into object values to find arrays of messages
-      if (depth === 0) {
+      if (depth < 3) {
         out.children = {};
         for (const k of keys.slice(0, 30)) {
           out.children[k] = describeShape(v[k], depth + 1);
@@ -514,16 +516,17 @@ class ScrapeJobs {
   // Returns null if nothing matched, or an array of {id, subject, ...}.
   function extractRowsFromApiResponse(data) {
     if (!data || typeof data !== 'object') return null;
-    // Candidate paths to the message list (try in order)
+    // Confirmed: Stanford returns { meta, myHealthMailboxPage: { more, messageList } }.
+    // Listed first; the other candidates remain as a defense against
+    // tenant or version variation.
+    const mp = data.myHealthMailboxPage;
     const candidates = [
+      mp && mp.messageList,
+      mp && mp.Messages,
       data.Messages, data.messages,
       data.Items, data.items,
       data.Results, data.results,
       data.Data, data.data,
-      data.Mailbox && data.Mailbox.Messages,
-      data.Outbox && data.Outbox.Messages,
-      data.Page && data.Page.Messages,
-      data.Page && data.Page.Items,
       Array.isArray(data) ? data : null,
     ].filter(c => Array.isArray(c) && c.length >= 0);
     if (candidates.length === 0) return null;
