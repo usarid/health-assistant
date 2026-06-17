@@ -437,10 +437,37 @@ class ScrapeJobs {
     };
     const OrigXHR = window.XMLHttpRequest;
     const origOpen = OrigXHR.prototype.open;
+    const origSend = OrigXHR.prototype.send;
     OrigXHR.prototype.open = function(method, url) {
-      xhrLog.push({ kind: 'xhr', method,
-                    url: (url || '').slice(0, 200), at: Date.now() - t0 });
+      this.__binaMethod = method;
+      this.__binaUrl = (url || '').slice(0, 200);
+      this.__binaOpenAt = Date.now() - t0;
+      xhrLog.push({ kind: 'xhr', method, url: this.__binaUrl, at: this.__binaOpenAt });
       return origOpen.apply(this, arguments);
+    };
+    // Also capture XHR request bodies for the two endpoints we care
+    // about — lets us see exactly what the SPA's working call sends,
+    // so we can match it. Bodies on /Mailbox/Page and /Outbox/Page are
+    // filter + pagination params; never message content.
+    OrigXHR.prototype.send = function(body) {
+      const u = this.__binaUrl || '';
+      if (/\\/(Mailbox|Outbox)\\/Page/.test(u)) {
+        let bodyStr = '';
+        try {
+          bodyStr = (body == null) ? ''
+            : (typeof body === 'string') ? body
+            : (body && body.toString) ? body.toString()
+            : JSON.stringify(body);
+        } catch (_) { bodyStr = '<unserializable>'; }
+        xhrLog.push({
+          kind: 'xhr-body',
+          url: u,
+          method: this.__binaMethod || '',
+          body: bodyStr.slice(0, 400),
+          at: Date.now() - t0,
+        });
+      }
+      return origSend.apply(this, arguments);
     };
   } catch (_) {}
 
@@ -555,9 +582,16 @@ class ScrapeJobs {
     }).filter(r => r.id);  // drop entries where we couldn't find an ID
   }
 
+  // Timing breakdown for the whole script — emitted in the final
+  // diag so we can pinpoint where each ms goes per page.
+  const timings = {};
+  function mark(label, ms) { timings[label] = ms; }
+
   // Make the API call NOW, before priming the SPA — if it works we're
   // done in <1s and the SPA priming is moot.
+  const apiStart = Date.now();
   const apiResult = await fetchListViaAPI();
+  mark('apiCallMs', Date.now() - apiStart);
   let apiRows = null;
   let apiShape = null;
   if (apiResult.ok && apiResult.data) {
@@ -565,7 +599,45 @@ class ScrapeJobs {
     apiShape = describeShape(apiResult.data);
   }
 
-  // ── In-app nav primer ─────────────────────────────────────────
+  // SHORT-CIRCUIT: if the API call succeeded (HTTP 200), trust its
+  // answer — even if it returned 0 rows. The SPA priming + 30s DOM
+  // long-poll exists only as a fallback for the case where the API is
+  // unreachable or auth-blocked. Saves ~35s per page in the empty-folder
+  // and authenticated-but-no-results cases.
+  if (apiResult.ok) {
+    mark('totalMs', Date.now() - t0);
+    emit({
+      url: location.href,
+      pathname: location.pathname,
+      folder,
+      rowCount: (apiRows || []).length,
+      rows: apiRows || [],
+      pagination: { hasNext: false },   // direct-API path uses cursor pagination at Dart layer (next commit)
+      pollMs: 0,
+      pollTimedOut: false,
+      pageTitle: document.title,
+      headings: Array.from(document.querySelectorAll('h1, h2'))
+        .slice(0, 3).map(h => (h.textContent || '').trim().slice(0, 60)),
+      bodyLength: (document.body?.textContent || '').length,
+      xhrLog,
+      api: {
+        status: apiResult.status,
+        ok: true,
+        rowsExtracted: (apiRows || []).length,
+        shape: apiShape,
+      },
+      rowSource: (apiRows && apiRows.length > 0) ? 'api' : 'api-empty',
+      timings,
+      error: (apiRows && apiRows.length > 0) ? null : 'api-returned-zero-rows',
+    });
+    return;
+  }
+
+  // ── In-app nav primer (FALLBACK PATH) ────────────────────────
+  // Only reached when the direct API call failed (network error or
+  // non-2xx). The SPA-priming + DOM long-poll path tries to coax the
+  // SPA into rendering rows we can scrape from the DOM as a last resort.
+  mark('apiFailedFellThroughAt', Date.now() - t0);
   // 30s direct-loadUrl poll proved the Stanford SPA is inert under
   // direct deep-linking: bodyLength stayed at 7.5KB, zero XHRs, zero
   // iframes mounted. The SPA expects in-app navigation (a click within
@@ -876,6 +948,7 @@ class ScrapeJobs {
       sample: apiResult.sample || null,
     },
     rowSource: (apiRows && apiRows.length > 0) ? 'api' : (rows.length > 0 ? 'dom' : null),
+    timings: { ...timings, totalMs: Date.now() - t0 },
     firstRowParse,
     error: rows.length === 0 ? 'no-rows-found' : null,
     diagnostics: structuralDiag,

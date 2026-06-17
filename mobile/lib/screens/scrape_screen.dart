@@ -839,36 +839,62 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   }
 
   /// Load one message-list URL, inject the list scraper, await the result.
+  /// Returns the JS payload with a `dartTimings` field added — per-phase
+  /// breakdown (navMs / settleMs / jsMs / totalMs) so we can tell where
+  /// each second goes between Dart-side waits and JS-side work.
   Future<Map<String, dynamic>?> _scrapeMessageListPage(String url) async {
+    final stopwatch = Stopwatch()..start();
+    final phases = <String, int>{};
+
     _navCompleter = Completer<void>();
     try {
       await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(url)));
     } catch (_) {
-      return null;
+      return {'dartTimings': {'totalMs': stopwatch.elapsedMilliseconds}, 'error': 'loadUrl-threw'};
     }
+    final navStart = stopwatch.elapsedMilliseconds;
     try {
       await _navCompleter!.future.timeout(const Duration(seconds: 20));
     } on TimeoutException {
-      return {'error': 'nav-timeout'};
+      return {
+        'dartTimings': {'navMs': stopwatch.elapsedMilliseconds - navStart, 'totalMs': stopwatch.elapsedMilliseconds},
+        'error': 'nav-timeout',
+      };
     }
-    // Brief settle for the SPA — the JS itself polls for up to 8s for
-    // rows to render, so a short Dart-side delay here is enough.
+    phases['navMs'] = stopwatch.elapsedMilliseconds - navStart;
+
+    // Brief settle for the SPA — the JS itself polls internally, so a
+    // short Dart-side delay here is enough.
+    final settleStart = stopwatch.elapsedMilliseconds;
     await Future.delayed(const Duration(seconds: 2));
+    phases['settleMs'] = stopwatch.elapsedMilliseconds - settleStart;
+
+    final jsStart = stopwatch.elapsedMilliseconds;
     _messageListCompleter = Completer<Map<String, dynamic>>();
     try {
       await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordMessageList());
     } catch (e) {
-      return {'error': 'inject-failed: $e'};
+      return {
+        'dartTimings': {...phases, 'totalMs': stopwatch.elapsedMilliseconds},
+        'error': 'inject-failed: $e',
+      };
     }
-    // JS budget: ~5s chrome-wait + ~4.5s primer-click sequence + 30s long
-    // poll = ~40s worst case. Allow 60s round-trip so we never preempt
-    // the JS — losing all its diagnostics is more expensive than waiting.
+    // JS budget: <1s on the API-success path; ~40s worst-case on DOM
+    // fallback. Allow 60s round-trip so the JS always gets to emit.
+    Map<String, dynamic> result;
     try {
-      return await _messageListCompleter!.future
+      result = await _messageListCompleter!.future
           .timeout(const Duration(seconds: 60));
     } on TimeoutException {
-      return {'error': 'scrape-timeout'};
+      return {
+        'dartTimings': {...phases, 'jsMs': stopwatch.elapsedMilliseconds - jsStart, 'totalMs': stopwatch.elapsedMilliseconds},
+        'error': 'scrape-timeout',
+      };
     }
+    phases['jsMs'] = stopwatch.elapsedMilliseconds - jsStart;
+    phases['totalMs'] = stopwatch.elapsedMilliseconds;
+    result['dartTimings'] = phases;
+    return result;
   }
 
   static String _truncForLog(String s) {
