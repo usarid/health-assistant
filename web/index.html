@@ -2255,11 +2255,13 @@ function msgGroupAndSort() {
   msgConversations = [];
   for (const [key, msgs] of byKey) {
     msgs.sort((a, b) => (a.sent || '').localeCompare(b.sent || ''));
+    const oldest = msgs[0];
     const latest = msgs[msgs.length - 1];
     const otherParty = msgOtherParty(latest);
     const subject = ((latest.topic || {}).text || '').trim();
     msgConversations.push({
       key, msgs,
+      oldestSent: oldest.sent || '',
       latestSent: latest.sent || '',
       otherParty,
       subject,
@@ -2289,6 +2291,22 @@ function fmtMsgBubbleDate(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function fmtMsgDateRange(startIso, endIso) {
+  if (!startIso || !endIso) return fmtMsgListDate(endIso || startIso);
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return fmtMsgListDate(endIso);
+  if (start.toDateString() === end.toDateString()) return fmtMsgListDate(endIso);
+  const now = new Date();
+  const sameYear = start.getFullYear() === end.getFullYear();
+  const currentYear = end.getFullYear() === now.getFullYear();
+  const monthDay = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const monthDayYear = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  if (sameYear && currentYear) return `${monthDay(start)} – ${monthDay(end)}`;
+  if (sameYear) return `${monthDay(start)} – ${monthDayYear(end)}`;
+  return `${monthDayYear(start)} – ${monthDayYear(end)}`;
 }
 
 function onMsgFilterInput() {
@@ -2346,6 +2364,7 @@ function renderMsgConversationList() {
         <span class="msg-conv-badge">${c.count} msg</span>
         ${c.inboxCount > 0 ? `<span>↓ ${c.inboxCount}</span>` : ''}
         ${c.outboxCount > 0 ? `<span>↑ ${c.outboxCount}</span>` : ''}
+        ${c.count > 1 ? `<span>${escapeHtml(fmtMsgDateRange(c.oldestSent, c.latestSent))}</span>` : ''}
       </div>
     </div>`;
   });
