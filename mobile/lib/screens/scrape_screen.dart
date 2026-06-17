@@ -92,6 +92,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (Stanford)')),
               const PopupMenuItem(value: 'test-fetch-one-message', child: Text('Test: fetch one message body')),
+              const PopupMenuItem(value: 'fetch-all-message-bodies', child: Text('Fetch all message bodies (Stanford)')),
             ],
           ),
         ],
@@ -409,6 +410,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _discoverMessages();
     } else if (value == 'test-fetch-one-message') {
       await _testFetchOneMessage();
+    } else if (value == 'fetch-all-message-bodies') {
+      await _fetchAllMessageBodies();
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
@@ -923,6 +926,110 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       final endpoint = result['endpoint']?.toString() ?? '(none worked)';
       setState(() => _status = 'Test fetch ${ok ? "OK" : "FAILED"} — '
           'endpoint=$endpoint → $path');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// Iterate every {folder, id} pair in the most recent discovery file
+  /// and POST /Mailbox/Message for each. Per-message files written
+  /// immediately (crash-safe); manifest rewritten per message;
+  /// consolidated batch at end. Mirrors the per-visit-note resilience
+  /// model.
+  Future<void> _fetchAllMessageBodies() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+
+    final ids = await LocalWriter.allMessageRowsFromLatestDiscovery();
+    if (ids.isEmpty) {
+      setState(() => _status = 'No discovery rows — run "Discover messages" first.');
+      return;
+    }
+
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchTotal = ids.length;
+      _batchIndex = 0;
+      _batchStartedAt = DateTime.now();
+      _status = 'Fetching ${ids.length} message bodies…';
+    });
+
+    final captured = <Map<String, dynamic>>[];
+    final errors = <Map<String, dynamic>>[];
+    final rng = Random();
+
+    try {
+      for (int i = 0; i < ids.length; i++) {
+        if (_abortRequested) {
+          setState(() => _status = 'Aborted at $i/${ids.length}');
+          break;
+        }
+        final folder = ids[i]['folder']!;
+        final id = ids[i]['id']!;
+        setState(() {
+          _batchIndex = i + 1;
+          _status = 'Fetching $folder/$id  ($_batchIndex/$_batchTotal '
+              '— ${captured.length} captured, ${errors.length} errors)';
+        });
+        await LocalWriter.writeMessageBatchManifest(MessageBatchManifest(
+          startedAt: _batchStartedAt!,
+          totalCount: ids.length,
+          currentIndex: i,
+          capturedCount: captured.length,
+          errorCount: errors.length,
+          currentFolder: folder,
+          currentId: id,
+        ));
+
+        _messageDetailCompleter = Completer<Map<String, dynamic>>();
+        try {
+          await _ctrl!.evaluateJavascript(
+            source: ScrapeJobs.stanfordMessageDetail(folder: folder, messageId: id),
+          );
+        } catch (e) {
+          errors.add({'folder': folder, 'id': id, 'reason': 'inject-failed:$e'});
+          continue;
+        }
+        Map<String, dynamic> result;
+        try {
+          result = await _messageDetailCompleter!.future
+              .timeout(const Duration(seconds: 20));
+        } on TimeoutException {
+          errors.add({'folder': folder, 'id': id, 'reason': 'fetch-timeout'});
+          continue;
+        }
+
+        if (result['ok'] != true) {
+          errors.add({
+            'folder': folder, 'id': id,
+            'reason': result['error']?.toString() ?? 'unknown',
+            'attempts': result['attempts'],
+          });
+          continue;
+        }
+        captured.add(result);
+        await LocalWriter.writeMessageBody(folder, id, result);
+
+        // Light pacing to stay below Stanford's rate-limit threshold.
+        // Each message fetch is ~200ms; total batch with 752 messages
+        // would be ~3 min at no-pace, ~7 min with this jitter.
+        if (i + 1 < ids.length) {
+          final pauseMs = 200 + rng.nextInt(400);
+          await Future.delayed(Duration(milliseconds: pauseMs));
+        }
+      }
+
+      final finishedAt = DateTime.now();
+      final path = await LocalWriter.writeMessageBatchConsolidated(
+        captured: captured,
+        errors: errors,
+        startedAt: _batchStartedAt!,
+        finishedAt: finishedAt,
+      );
+      final dur = finishedAt.difference(_batchStartedAt!);
+      setState(() => _status = 'DONE in ${dur.inSeconds}s — '
+          '${captured.length} captured, ${errors.length} errors → $path');
     } finally {
       setState(() => _batchRunning = false);
     }

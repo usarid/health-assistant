@@ -156,6 +156,89 @@ class LocalWriter {
     return file.path;
   }
 
+  /// Read ALL {folder, id} pairs from the most recent discovery file.
+  /// Used by the Phase 3-2 batch loop to know which messages to fetch.
+  static Future<List<Map<String, String>>> allMessageRowsFromLatestDiscovery() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final entries = await Directory(dir.path).list().toList();
+    final files = entries
+        .whereType<File>()
+        .where((f) => f.path.contains('stanford-messages-discovery-'))
+        .toList()
+      ..sort((a, b) => b.path.compareTo(a.path));
+    if (files.isEmpty) return const [];
+    try {
+      final raw = await files.first.readAsString();
+      final m = jsonDecode(raw);
+      if (m is! Map) return const [];
+      final rows = m['rows'];
+      if (rows is! List) return const [];
+      final out = <Map<String, String>>[];
+      for (final r in rows) {
+        if (r is Map && r['id'] is String && r['folder'] is String) {
+          out.add({'folder': r['folder'] as String, 'id': r['id'] as String});
+        }
+      }
+      return out;
+    } catch (_) {}
+    return const [];
+  }
+
+  /// Per-message body file — one JSON per message ID for crash safety
+  /// during long batch runs.
+  static Future<String> writeMessageBody(
+    String folder,
+    String id,
+    Map<String, dynamic> data,
+  ) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final msgDir = Directory('${dir.path}/messages');
+    await msgDir.create(recursive: true);
+    final file = File('${msgDir.path}/stanford-msg-$folder-${_csnSlug(id)}.json');
+    final body = jsonEncode({
+      'folder': folder,
+      'id': id,
+      'savedAt': DateTime.now().toUtc().toIso8601String(),
+      'data': data,
+    });
+    await file.writeAsString(body);
+    return file.path;
+  }
+
+  /// Per-batch progress manifest — small file rewritten as each message
+  /// completes so a crash mid-batch leaves a recovery anchor.
+  static Future<String> writeMessageBatchManifest(MessageBatchManifest m) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/stanford-message-batch-manifest.json');
+    await file.writeAsString(jsonEncode(m.toJson()));
+    return file.path;
+  }
+
+  /// Consolidated message-bodies batch written at run end. The shape is
+  /// the input the FHIR Communications translator (Phase 3-2 next
+  /// commit) consumes.
+  static Future<String> writeMessageBatchConsolidated({
+    required List<Map<String, dynamic>> captured,
+    required List<Map<String, dynamic>> errors,
+    required DateTime startedAt,
+    required DateTime finishedAt,
+  }) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
+    final file = File('${dir.path}/stanford-message-batch-$ts.json');
+    final payload = {
+      'portal': 'stanford',
+      'startedAt': startedAt.toUtc().toIso8601String(),
+      'finishedAt': finishedAt.toUtc().toIso8601String(),
+      'capturedCount': captured.length,
+      'errorCount': errors.length,
+      'captured': captured,
+      'errors': errors,
+    };
+    await file.writeAsString(jsonEncode(payload));
+    return file.path;
+  }
+
   /// Append one diag event to the current batch's diag JSONL file. Each
   /// line is a self-contained JSON object — easy to grep/parse later.
   /// Metadata only (URL paths, lengths, counts); never note text or labels.
@@ -404,5 +487,33 @@ class BatchManifest {
     'capturedCount': capturedCount,
     'errorCount': errorCount,
     'currentCsn': currentCsn,
+  };
+}
+
+class MessageBatchManifest {
+  final DateTime startedAt;
+  final int totalCount;
+  final int currentIndex;
+  final int capturedCount;
+  final int errorCount;
+  final String? currentFolder;
+  final String? currentId;
+  MessageBatchManifest({
+    required this.startedAt,
+    required this.totalCount,
+    required this.currentIndex,
+    required this.capturedCount,
+    required this.errorCount,
+    this.currentFolder,
+    this.currentId,
+  });
+  Map<String, dynamic> toJson() => {
+    'startedAt': startedAt.toUtc().toIso8601String(),
+    'totalCount': totalCount,
+    'currentIndex': currentIndex,
+    'capturedCount': capturedCount,
+    'errorCount': errorCount,
+    'currentFolder': currentFolder,
+    'currentId': currentId,
   };
 }
