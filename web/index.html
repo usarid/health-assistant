@@ -318,38 +318,35 @@
      include the chrome toolbars and inner scrolling is unreliable
      (long threads get cut off with no scrollbar). */
   @media (max-width: 800px) {
-    /* When a thread is open on mobile, lock the body to viewport
-       height with overflow hidden so ONLY the bubbles container
-       scrolls. Without this, even with the pane sized correctly,
-       default body margins and rounding push the total content
-       just past the viewport, letting the user scroll the whole
-       page (nav + status bar slide off the top, breaking the
-       "header stays put" illusion). Untouched on the list view
-       (no .msg-thread-open class) so list-page scrolls normally. */
-    body.msg-thread-open { overflow: hidden; height: 100vh; margin: 0; }
-    body.msg-thread-open #page-messages { height: 100vh; overflow: hidden; }
+    /* List view (no thread open): page body scrolls naturally like
+       any vertical list of cards. */
     .msg-layout { gap: 0; flex-direction: column; min-height: 0; }
-    /* List pane: let the page body scroll normally (it's a vertical list
-       of cards, page-scroll is fine, no header to keep in view). */
     .msg-list-pane { width: 100%; max-height: none; overflow: visible; }
     .msg-list { overflow-y: visible; }
-    /* Thread pane: when open, becomes the scroll container itself.
-       Height is set in JS via fitMessagesPane() — measures the pane's
-       top edge against window.innerHeight, which is the only reliable
-       way to get the visible area in iOS app webviews (100vh and
-       100dvh both behave inconsistently when the webview is embedded
-       inside a native app with its own chrome). Inner flex split:
-       header is flex-shrink:0 (stays at top), bubbles flex:1 +
-       overflow-y:auto (the actual scroll surface). The back button
-       is part of the non-scrolling header, so it's always reachable
-       without needing any sticky/fixed positioning. */
-    .msg-thread-pane { display: none; max-height: none; overflow: hidden; }
+    .msg-thread-pane { display: none; }
     body.msg-thread-open .msg-list-pane { display: none; }
-    body.msg-thread-open .msg-thread-pane { display: flex; flex-direction: column; }
-    body.msg-thread-open .msg-thread { height: auto; flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
-    body.msg-thread-open .msg-thread-header { flex-shrink: 0; }
-    body.msg-thread-open .msg-thread-bubbles { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; min-height: 0; }
     .msg-back-btn { display: inline-block; }
+
+    /* Thread-open mode: pure-CSS flex chain from body down to bubbles.
+       Each level: flex:1 + overflow:hidden + min-height:0 (the
+       last is essential — without it flex children won't shrink
+       below their content size and the scroll never engages). Only
+       the bubbles container is overflow-y:auto, so it's the single
+       scroll surface. No JS height measurement needed — the browser
+       computes everything from the cascade.
+
+       body flex children: nav (flex-shrink:0), status-bar
+       (flex-shrink:0), the .active page (flex:1). Inactive pages
+       are display:none so they don't take flex slots. */
+    body.msg-thread-open { display: flex; flex-direction: column; height: 100vh; margin: 0; overflow: hidden; }
+    body.msg-thread-open > nav { flex-shrink: 0; }
+    body.msg-thread-open > .status-bar { flex-shrink: 0; }
+    body.msg-thread-open > .page.active { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+    body.msg-thread-open .msg-layout { flex: 1; min-height: 0; overflow: hidden; }
+    body.msg-thread-open .msg-thread-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; max-height: none; }
+    body.msg-thread-open .msg-thread { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; height: auto; }
+    body.msg-thread-open .msg-thread-header { flex-shrink: 0; }
+    body.msg-thread-open .msg-thread-bubbles { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
   }
 
   /* ── Timeline page ── */
@@ -2364,27 +2361,8 @@ function renderMsgConversationList() {
 function closeMsgThread() {
   document.body.classList.remove('msg-thread-open');
   msgSelectedThreadKey = null;
-  const pane = document.querySelector('.msg-thread-pane');
-  if (pane) pane.style.height = '';
   renderMsgConversationList();
 }
-
-/// Measure the thread pane's distance from the top of the viewport and
-/// set its height so it fills exactly the rest of the visible area.
-/// Inner flex layout (header flex-shrink:0 + bubbles flex:1) takes
-/// care of the rest. Re-runs on window resize / orientation change
-/// because both can shift the pane's top edge.
-function fitMessagesPane() {
-  if (window.innerWidth > 800) return;
-  if (!document.body.classList.contains('msg-thread-open')) return;
-  const pane = document.querySelector('.msg-thread-pane');
-  if (!pane) return;
-  const rect = pane.getBoundingClientRect();
-  const avail = window.innerHeight - rect.top;
-  if (avail > 100) pane.style.height = avail + 'px';
-}
-window.addEventListener('resize', fitMessagesPane);
-window.addEventListener('orientationchange', () => setTimeout(fitMessagesPane, 100));
 
 function openMsgConversation(key) {
   msgSelectedThreadKey = key;
@@ -2417,10 +2395,9 @@ function openMsgConversation(key) {
     </div>`;
   }).join('');
 
-  // Size the pane on mobile so the inner flex (header + bubbles)
-  // gets a definite parent height. Then scroll the bubbles container
-  // to its bottom (the most recent message) like a chat app.
-  fitMessagesPane();
+  // Scroll the bubbles container to its bottom (most recent message)
+  // like a chat app. Pure-CSS flex chain handles the height math —
+  // no JS sizing needed.
   bubblesEl.scrollTop = bubblesEl.scrollHeight;
 }
 
