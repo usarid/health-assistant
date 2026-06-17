@@ -114,7 +114,9 @@ services:
       ASSISTANT_DB: "/data/chat.db"
       OLLAMA_BASE: "http://host.docker.internal:11434"
       # Defaults — overridden if .env defines the same key.
-      ANTHROPIC_MODEL: "claude-sonnet-4-20250514"
+      # Use the bare alias (no date suffix) so we don't get 404s when a
+      # snapshot retires. Dated IDs deprecate ~6-12 months after release.
+      ANTHROPIC_MODEL: "claude-sonnet-4-6"
       OLLAMA_MODEL: "mistral"
       EPIC_REDIRECT_URI: "https://binahealth.com/callback"
     volumes:

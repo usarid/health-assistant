@@ -30,7 +30,11 @@ router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 
 # ── Configuration ──────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+# Use the bare alias (no date suffix) — aliases auto-resolve to the latest
+# snapshot in the tier and don't expire on a calendar. Dated snapshot IDs
+# (claude-sonnet-4-20250514, etc.) are deprecated and retire 6-12 months
+# after release, returning 404 from that day onward. Stick to the alias.
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 HAPI_BASE = os.environ.get("HAPI_BASE", "http://hapi:8080/fhir")
 DB_PATH = os.environ.get("ASSISTANT_DB", "/data/chat.db")
 

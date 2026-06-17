@@ -115,7 +115,7 @@ health-assistant/
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `ANTHROPIC_API_KEY` | API key for Claude AI features | — |
-| `ANTHROPIC_MODEL` | Claude model to use | `claude-sonnet-4-20250514` |
+| `ANTHROPIC_MODEL` | Claude model — use the bare alias (`claude-sonnet-4-6`, `claude-opus-4-8`), not dated snapshots | `claude-sonnet-4-6` |
 | `EPIC_CLIENT_ID` | Epic on FHIR app client ID | — |
 | `EPIC_CLIENT_SECRET` | Epic sandbox client secret | — |
 | `EPIC_REDIRECT_URI` | OAuth callback URL | `https://localhost:3000/callback` |
