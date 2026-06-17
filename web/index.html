@@ -2364,7 +2364,6 @@ function renderMsgConversationList() {
         <span class="msg-conv-badge">${c.count} msg</span>
         ${c.inboxCount > 0 ? `<span>↓ ${c.inboxCount}</span>` : ''}
         ${c.outboxCount > 0 ? `<span>↑ ${c.outboxCount}</span>` : ''}
-        ${c.count > 1 ? `<span>${escapeHtml(fmtMsgDateRange(c.oldestSent, c.latestSent))}</span>` : ''}
       </div>
     </div>`;
   });
@@ -2395,10 +2394,13 @@ function openMsgConversation(key) {
   threadEl.style.display = '';
 
   const headerEl = document.getElementById('msg-thread-header');
+  const rangeStr = conv.count > 1
+    ? ' · ' + escapeHtml(fmtMsgDateRange(conv.oldestSent, conv.latestSent))
+    : (conv.latestSent ? ' · ' + escapeHtml(fmtMsgListDate(conv.latestSent)) : '');
   headerEl.innerHTML = `
     <button class="msg-back-btn" onclick="closeMsgThread()">← Back to conversations</button>
     <h2>${escapeHtml(conv.subject || '(no subject)')}</h2>
-    <div class="msg-thread-meta">${escapeHtml(conv.otherParty)} · ${conv.count} message${conv.count === 1 ? '' : 's'}</div>
+    <div class="msg-thread-meta">${escapeHtml(conv.otherParty)} · ${conv.count} message${conv.count === 1 ? '' : 's'}${rangeStr}</div>
   `;
 
   const bubblesEl = document.getElementById('msg-thread-bubbles');
