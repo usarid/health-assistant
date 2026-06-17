@@ -2293,6 +2293,27 @@ function fmtMsgBubbleDate(iso) {
   return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
 
+/// Remove Stanford's inlined "----- Message -----" quoted chain + the
+/// "- - - DISCLAIMER - - -" footer from a message body. The earlier
+/// messages in the thread already appear as their own bubbles, so the
+/// inlined copy is just visual noise that bloats each bubble. Cut at
+/// the earliest section header line; keep everything before.
+function stripInlinedChain(body) {
+  if (!body) return '';
+  const lines = body.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (/^-{3,}\s*Message\s*-{3,}\s*$/i.test(line)) {
+      return lines.slice(0, i).join('\n').replace(/\s+$/, '');
+    }
+    if (/^[-\s]*DISCLAIMER[-\s]*$/i.test(line)) {
+      return lines.slice(0, i).join('\n').replace(/\s+$/, '');
+    }
+  }
+  return body.replace(/\s+$/, '');
+}
+
 function fmtMsgDateRange(startIso, endIso) {
   if (!startIso || !endIso) return fmtMsgListDate(endIso || startIso);
   const start = new Date(startIso);
@@ -2347,7 +2368,7 @@ function renderMsgConversationList() {
 
   const parts = filtered.map((c, i) => {
     const latest = c.msgs[c.msgs.length - 1];
-    const body = msgFieldText(latest, 'payload.0.contentString');
+    const body = stripInlinedChain(msgFieldText(latest, 'payload.0.contentString'));
     const snippet = body.replace(/\s+/g, ' ').slice(0, 80);
     const isActive = c.key === msgSelectedThreadKey;
     // Use data-i + addEventListener (below) instead of an inline onclick
@@ -2408,7 +2429,7 @@ function openMsgConversation(key) {
     const folder = msgFolder(m);
     const cls = folder === 'outbox' ? 'outbound' : 'inbound';
     const sender = (m.sender || {}).display || '(unknown)';
-    const body = msgFieldText(m, 'payload.0.contentString');
+    const body = stripInlinedChain(msgFieldText(m, 'payload.0.contentString'));
     return `<div class="msg-bubble ${cls}">
       <div class="msg-bubble-sender">${escapeHtml(sender)}</div>
       <div class="msg-bubble-body">${escapeHtml(body)}</div>
