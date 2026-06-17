@@ -48,6 +48,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Completer<void>? _navCompleter;
   Completer<Map<String, dynamic>>? _scrapeCompleter;
   Completer<Map<String, dynamic>>? _messageListCompleter;
+  Completer<Map<String, dynamic>>? _messageDetailCompleter;
 
   // Batch state
   int _batchTotal = 0;
@@ -90,6 +91,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuItem(value: 'retry-failures', child: Text('Retry failed visits')),
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (Stanford)')),
+              const PopupMenuItem(value: 'test-fetch-one-message', child: Text('Test: fetch one message body')),
             ],
           ),
         ],
@@ -168,6 +170,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 c.addJavaScriptHandler(
                   handlerName: 'messageList',
                   callback: _onMessageListHandler,
+                );
+                c.addJavaScriptHandler(
+                  handlerName: 'messageDetail',
+                  callback: _onMessageDetailHandler,
                 );
               },
               onLoadStop: (c, url) async {
@@ -268,6 +274,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final m = Map<String, dynamic>.from(args.first as Map);
     if (_messageListCompleter != null && !_messageListCompleter!.isCompleted) {
       _messageListCompleter!.complete(m);
+    }
+    return {'ok': true};
+  }
+
+  /// JS handler for one fetched message body. Completes
+  /// [_messageDetailCompleter] with the full payload (endpoint,
+  /// attempts, the message data itself, plus diagnostics).
+  Future<dynamic> _onMessageDetailHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_messageDetailCompleter != null && !_messageDetailCompleter!.isCompleted) {
+      _messageDetailCompleter!.complete(m);
     }
     return {'ok': true};
   }
@@ -389,6 +407,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       ));
     } else if (value == 'discover-messages') {
       await _discoverMessages();
+    } else if (value == 'test-fetch-one-message') {
+      await _testFetchOneMessage();
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
@@ -847,6 +867,62 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       setState(() => _status =
           'Discovery done in ${dur.inSeconds}s — ${allRows.length} rows '
           '(${meta['inboxRowCount']} inbox, ${meta['outboxRowCount']} outbox) → $path');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// One-shot probe — picks the first message ID from the most recent
+  /// discovery file and runs the detail fetcher against it. Saves the
+  /// result to a test-fetch-*.json file for inspection. Used to
+  /// confirm the per-message endpoint shape before committing to a
+  /// full batch loop.
+  Future<void> _testFetchOneMessage() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+
+    // Pull the most recent discovery file from disk
+    final pick = await LocalWriter.firstMessageRowFromLatestDiscovery();
+    if (pick == null) {
+      setState(() => _status = 'No message discovery file found — run '
+          '"Discover messages" first.');
+      return;
+    }
+    final folder = pick['folder'] as String;
+    final id = pick['id'] as String;
+
+    setState(() {
+      _batchRunning = true;
+      _status = 'Test fetch: $folder message $id…';
+    });
+
+    try {
+      // We're already at /signedin/messages/... from prior nav (or login
+      // landing). The detail endpoint is same-origin JSON, so as long
+      // as the session cookie is present (it is), we don't need to
+      // navigate to a specific page first.
+      _messageDetailCompleter = Completer<Map<String, dynamic>>();
+      try {
+        await _ctrl!.evaluateJavascript(
+          source: ScrapeJobs.stanfordMessageDetail(folder: folder, messageId: id),
+        );
+      } catch (e) {
+        setState(() => _status = 'Inject failed: $e');
+        return;
+      }
+      Map<String, dynamic> result;
+      try {
+        result = await _messageDetailCompleter!.future
+            .timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        setState(() => _status = 'Test fetch timed out (30s).');
+        return;
+      }
+      final path = await LocalWriter.writeMessageTestFetch(result);
+      final ok = result['ok'] == true;
+      final endpoint = result['endpoint']?.toString() ?? '(none worked)';
+      setState(() => _status = 'Test fetch ${ok ? "OK" : "FAILED"} — '
+          'endpoint=$endpoint → $path');
     } finally {
       setState(() => _batchRunning = false);
     }

@@ -119,6 +119,43 @@ class LocalWriter {
     return file.path;
   }
 
+  /// Pull the first usable {folder, id} pair from the most recent
+  /// stanford-messages-discovery-*.json file. Used by the Phase 3-2
+  /// test-fetch probe to pick a real message ID without hardcoding one.
+  static Future<Map<String, String>?> firstMessageRowFromLatestDiscovery() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final entries = await Directory(dir.path).list().toList();
+    final files = entries
+        .whereType<File>()
+        .where((f) => f.path.contains('stanford-messages-discovery-'))
+        .toList()
+      ..sort((a, b) => b.path.compareTo(a.path));
+    if (files.isEmpty) return null;
+    try {
+      final raw = await files.first.readAsString();
+      final m = jsonDecode(raw);
+      if (m is! Map) return null;
+      final rows = m['rows'];
+      if (rows is! List) return null;
+      for (final r in rows) {
+        if (r is Map && r['id'] is String && r['folder'] is String) {
+          return {'folder': r['folder'] as String, 'id': r['id'] as String};
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Save one test-fetch result for inspection. Per-file, timestamped,
+  /// so multiple probes don't clobber each other.
+  static Future<String> writeMessageTestFetch(Map<String, dynamic> result) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final file = File('${dir.path}/stanford-message-test-fetch-$ts.json');
+    await file.writeAsString(jsonEncode(result));
+    return file.path;
+  }
+
   /// Append one diag event to the current batch's diag JSONL file. Each
   /// line is a self-contained JSON object — easy to grep/parse later.
   /// Metadata only (URL paths, lengths, counts); never note text or labels.

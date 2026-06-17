@@ -1160,6 +1160,204 @@ class ScrapeJobs {
 ''';
   }
 
+  /// Fetch one Stanford message's full body via the JSON API.
+  ///
+  /// Mirrors the stanfordMessageList architecture:
+  ///   - Hook XHR for body capture (diagnostic)
+  ///   - POST to a candidate endpoint with {payload: messageId}
+  ///   - On 0-row / non-2xx failure, grep the SPA's JS bundles for the
+  ///     real endpoint path
+  ///
+  /// Caller passes the [folder] ('inbox' or 'outbox') and the message
+  /// [messageId] (Stanford's numeric string ID from the discovery list).
+  ///
+  /// Result via callHandler('messageDetail', payload):
+  ///   { folder, id, ok, status, data, attempts, jsGrepHits?, error?, timings }
+  /// 'data' is the parsed JSON response from the working endpoint —
+  /// the body content + thread chain + metadata. PHI-bearing; stays
+  /// local on disk only.
+  static String stanfordMessageDetail({
+    required String folder,
+    required String messageId,
+  }) {
+    // Stanford's data API uses /Mailbox/* paths for both inbox AND
+    // outbox detail (the SPA's route /signedin/messages/detail/<folder>/<id>
+    // is just URL routing, not endpoint sharding). The most likely
+    // endpoint name by analogy with /Page is /Message; we also try
+    // common alternates.
+    final folderJs = "'${folder.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    final messageIdJs = "'${messageId.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    return '''
+(async () => {
+  const folder = $folderJs;
+  const messageId = $messageIdJs;
+  const t0 = Date.now();
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('messageDetail', payload);
+    }
+  }
+
+  // XHR + fetch interception — captures whatever URL Stanford itself
+  // uses when navigating to a detail page (if we trigger that flow as
+  // a diagnostic). PHI-safe: URL + truncated body only.
+  const xhrLog = [];
+  try {
+    const origFetch = window.fetch;
+    window.fetch = function(input, init) {
+      const url = (typeof input === 'string') ? input : (input && input.url) || '';
+      xhrLog.push({ kind: 'fetch', method: (init && init.method) || 'GET',
+                    url: url.slice(0, 200), at: Date.now() - t0 });
+      return origFetch.apply(this, arguments);
+    };
+    const OrigXHR = window.XMLHttpRequest;
+    const origOpen = OrigXHR.prototype.open;
+    const origSend = OrigXHR.prototype.send;
+    OrigXHR.prototype.open = function(method, url) {
+      this.__binaUrl = (url || '').slice(0, 200);
+      this.__binaMethod = method;
+      xhrLog.push({ kind: 'xhr', method, url: this.__binaUrl, at: Date.now() - t0 });
+      return origOpen.apply(this, arguments);
+    };
+    OrigXHR.prototype.send = function(body) {
+      const u = this.__binaUrl || '';
+      if (/\\/Mailbox\\/|\\/Outbox\\/|\\/Message/.test(u)) {
+        let bodyStr = '';
+        try {
+          bodyStr = body == null ? ''
+            : (typeof body === 'string') ? body
+            : JSON.stringify(body);
+        } catch (_) { bodyStr = '<unserializable>'; }
+        xhrLog.push({ kind: 'xhr-body', url: u, method: this.__binaMethod || '',
+                      body: bodyStr.slice(0, 400), at: Date.now() - t0 });
+      }
+      return origSend.apply(this, arguments);
+    };
+  } catch (_) {}
+
+  async function fetchOnce(endpoint, body, method) {
+    method = method || 'POST';
+    try {
+      const init = {
+        method,
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      };
+      if (method !== 'GET') {
+        init.headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(body);
+      }
+      const resp = await fetch(endpoint, init);
+      const text = await resp.text();
+      try { return { ok: resp.ok, status: resp.status, data: JSON.parse(text) }; }
+      catch (e) {
+        return { ok: false, status: resp.status, error: 'json-parse-failed',
+                 sample: text.slice(0, 500) };
+      }
+    } catch (e) {
+      return { ok: false, error: 'fetch-failed', message: (e && e.message) || '' };
+    }
+  }
+
+  // Endpoint candidates — by analogy with /Page; first match wins.
+  // The discriminated-union pattern (payload: false | string) from /Page
+  // suggests payload: <messageId> here too.
+  const candidates = [
+    { endpoint: '/Private/Ajax/V1/Mailbox/Message', body: { payload: messageId } },
+    { endpoint: '/Private/Ajax/V1/Mailbox/MessageDetail', body: { payload: messageId } },
+    { endpoint: '/Private/Ajax/V1/Mailbox/Detail', body: { payload: messageId } },
+    { endpoint: '/Private/Ajax/V1/Mailbox/Get', body: { payload: messageId } },
+    // Outbox alternates
+    { endpoint: '/Private/Ajax/V1/Outbox/Message', body: { payload: messageId } },
+    { endpoint: '/Private/Ajax/V1/Outbox/Detail', body: { payload: messageId } },
+  ];
+
+  const attempts = [];
+  let lastOk = null;
+  for (const c of candidates) {
+    const t0a = Date.now();
+    const r = await fetchOnce(c.endpoint, c.body);
+    attempts.push({
+      endpoint: c.endpoint, body: c.body,
+      status: r.status || null, ok: r.ok || false,
+      hasData: !!(r.data),
+      dataTopKeys: r.data && typeof r.data === 'object' ? Object.keys(r.data).slice(0, 8) : null,
+      elapsedMs: Date.now() - t0a,
+      error: r.error || null,
+    });
+    if (r.ok && r.data) {
+      lastOk = { endpoint: c.endpoint, result: r };
+      // Stanford's pattern: response wraps real data in a named field
+      // alongside `meta`. If we got a 200 + parseable JSON with anything
+      // beyond just `meta`, accept it as a win.
+      const dataKeys = Object.keys(r.data);
+      const hasContent = dataKeys.some(k => k !== 'meta');
+      if (hasContent) break;
+    }
+  }
+
+  // JS-source grep fallback — if no candidate gave us body content, scan
+  // Stanford's JS for a hint at the real endpoint. Same mechanism we
+  // used to discover {payload: false} for the list pages.
+  let jsGrepHits = null;
+  if (!lastOk || !attempts.some(a => a.ok && a.dataTopKeys && a.dataTopKeys.some(k => k !== 'meta'))) {
+    try {
+      const allScripts = Array.from(document.querySelectorAll('script[src]'))
+        .map(s => s.src).filter(u => u && /\\.js(\\?|\$)/i.test(u));
+      const needles = ['Mailbox/Message', 'Mailbox/Detail', 'Mailbox/Get',
+                       'Outbox/Message', 'Outbox/Detail', 'messageDetail',
+                       'GetMessage', 'getMessage'];
+      const probed = await Promise.all(allScripts.slice(0, 30).map(async url => {
+        try {
+          const r = await fetch(url, { mode: 'cors' });
+          if (!r.ok) return { url, status: r.status, error: 'http-' + r.status };
+          const text = await r.text();
+          return { url, status: r.status, length: text.length, text };
+        } catch (e) {
+          return { url, error: 'fetch-threw:' + ((e && e.message) || '').slice(0, 60) };
+        }
+      }));
+      const hits = [];
+      const probedUrls = [];
+      for (const p of probed) {
+        probedUrls.push({ url: p.url, length: p.length || 0,
+                          status: p.status || null, error: p.error || null });
+        if (!p.text) continue;
+        for (const n of needles) {
+          const idx = p.text.indexOf(n);
+          if (idx >= 0) {
+            hits.push({ url: p.url, needle: n,
+                        snippet: p.text.substring(Math.max(0, idx - 400), idx + 800) });
+            break;
+          }
+        }
+      }
+      jsGrepHits = { hits, probedCount: probed.filter(p => p.text).length,
+                     totalScripts: allScripts.length, probedUrls };
+    } catch (e) {
+      jsGrepHits = { error: (e && e.message) || String(e) };
+    }
+  }
+
+  emit({
+    folder, id: messageId,
+    ok: !!lastOk,
+    status: lastOk ? lastOk.result.status : null,
+    endpoint: lastOk ? lastOk.endpoint : null,
+    data: lastOk ? lastOk.result.data : null,
+    attempts,
+    xhrLog,
+    jsGrepHits,
+    timings: { totalMs: Date.now() - t0 },
+  });
+})();
+''';
+  }
+
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,
