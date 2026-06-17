@@ -116,7 +116,8 @@ services:
       # Defaults — overridden if .env defines the same key.
       # Use the bare alias (no date suffix) so we don't get 404s when a
       # snapshot retires. Dated IDs deprecate ~6-12 months after release.
-      ANTHROPIC_MODEL: "claude-sonnet-4-6"
+      ANTHROPIC_MODEL: "claude-sonnet-4-6"          # chat path (latency-sensitive)
+      ANTHROPIC_MODEL_ANALYST: "claude-opus-4-8"    # deep-analysis path (reasoning-heavy)
       OLLAMA_MODEL: "mistral"
       EPIC_REDIRECT_URI: "https://binahealth.com/callback"
     volumes:

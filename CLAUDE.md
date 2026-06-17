@@ -123,7 +123,8 @@ The Meds tab has an "Identify pill" button that opens a modal with photos and st
 
 ```
 ANTHROPIC_API_KEY     — Required for assistant/analyst
-ANTHROPIC_MODEL       — Default: claude-sonnet-4-6 (bare alias — do not pin to dated snapshots like claude-sonnet-4-20250514; they retire on a calendar and return 404)
+ANTHROPIC_MODEL       — Default: claude-sonnet-4-6 (chat path; latency-sensitive). Bare alias — do not pin to dated snapshots; they retire on a calendar and return 404.
+ANTHROPIC_MODEL_ANALYST — Default: claude-opus-4-8 (analyst path; reasoning-heavy, latency-tolerant). Falls back to ANTHROPIC_MODEL if unset.
 ASSISTANT_DB          — SQLite path (default: /data/chat.db)
 HAPI_BASE             — FHIR server URL (default: http://hapi:8080/fhir)
 OLLAMA_BASE           — Local LLM (default: http://host.docker.internal:11434)

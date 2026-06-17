@@ -28,11 +28,18 @@ router = APIRouter(prefix="/api/analyst", tags=["analyst"])
 
 # ── Configuration ──────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-# Use the bare alias (no date suffix) — aliases auto-resolve to the latest
-# snapshot in the tier and don't expire on a calendar. Dated snapshot IDs
-# (claude-sonnet-4-20250514, etc.) are deprecated and retire 6-12 months
-# after release, returning 404 from that day onward. Stick to the alias.
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+# Analyst runs the deep-analysis paths (trend, med review, pre-appointment)
+# — longer prompts, multi-step reasoning over more data than chat. Opus 4.8
+# has a meaningful edge on multi-step reasoning, and the analyst path
+# isn't latency-sensitive (the user is waiting for a thoughtful answer,
+# not a chat reply), so the higher cost / slower TTFT is worth it.
+#
+# ANTHROPIC_MODEL_ANALYST overrides ANTHROPIC_MODEL just for this module.
+# As with the chat default, use the bare alias — dated snapshots retire.
+ANTHROPIC_MODEL = os.environ.get(
+    "ANTHROPIC_MODEL_ANALYST",
+    os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-8"),
+)
 HAPI_BASE = os.environ.get("HAPI_BASE", "http://hapi:8080/fhir")
 
 # Attribution metadata
