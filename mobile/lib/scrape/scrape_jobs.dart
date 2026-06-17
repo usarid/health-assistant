@@ -498,38 +498,13 @@ class ScrapeJobs {
   // Each candidate is tried in sequence; first one that returns rows
   // wins. Cursor pagination overrides the body entirely.
   function bodyCandidatesFor(folder, cursor) {
-    if (!cursor) {
-      return [{ payload: false }];
-    }
-    // Broad pagination net — the 5 narrow variants all returned 0 rows
-    // with the cursor field accepted but interpreted as a filter. Try
-    // more shapes: cursor outside payload, cursor as bare value, cursor
-    // stripped of the ^ suffix, cursor field combined with payload:false,
-    // additional pagination hints (direction, page-N), and the chance
-    // that calling /Mailbox/Page twice with the same body advances via
-    // server-side cursor state.
-    const bareCursor = String(cursor).replace(/\\^/g, '');
-    return [
-      // Cursor as a stateful re-call (server keeps its own cursor)
-      { payload: false },
-      // Cursor inside payload (already tried in prior round, kept for shape parity)
-      { payload: { beginMessageId: cursor } },
-      { payload: { currentPageBeginMessageId: cursor } },
-      { payload: { nextPageBeginMessageId: cursor } },
-      // Stripped of ^ suffix
-      { payload: { beginMessageId: bareCursor } },
-      { payload: { currentPageBeginMessageId: bareCursor } },
-      // Direction / page-N hints
-      { payload: { beginMessageId: cursor, direction: 'next' } },
-      { payload: { beginMessageId: cursor, pageDirection: 'forward' } },
-      { payload: { currentPageBeginMessageId: cursor, pageNum: 2 } },
-      // Cursor outside payload
-      { payload: false, beginMessageId: cursor },
-      { payload: false, currentPageBeginMessageId: cursor },
-      // No payload wrapper at all
-      { beginMessageId: cursor },
-      { currentPageBeginMessageId: cursor },
-    ];
+    // Confirmed via DevTools capture of the SPA's own scroll-pagination
+    // POST: the `payload` field is a discriminated union —
+    //   payload: false          → first page (default request)
+    //   payload: "<cursorStr>"  → next page starting at that cursor
+    // The string value is the bare cursor we received in
+    // myHealthMailboxPage.nextPageBeginMessageId (with the ^ suffix).
+    return [{ payload: cursor || false }];
   }
 
   async function fetchOnce(endpoint, body) {
@@ -640,16 +615,20 @@ class ScrapeJobs {
     if (candidates.length === 0) return null;
     const arr = candidates[0];
     return arr.map(m => {
-      // Try common field names — Epic uses MixedCase
-      const id = m.Id || m.ID || m.MessageId || m.MessageID || m.id || '';
-      const subject = m.Subject || m.subject || m.Title || m.title || '';
-      const otherParty = m.From || m.from || m.Sender || m.sender
-                      || m.To || m.to || m.Recipient || m.recipient
-                      || (m.Provider && (m.Provider.Name || m.Provider.DisplayName))
-                      || '';
-      const date = m.Date || m.SentDate || m.ReceivedDate
-                || m.sent || m.received || m.timestamp || '';
-      const isUnread = !!(m.IsUnread || m.Unread || m.unread || m.isUnread);
+      // Confirmed via DevTools capture of Stanford's actual response.
+      // myHealthMailboxPage.messageList[].* fields:
+      //   id, senderName, title, dateSent, dateTimeSent, read,
+      //   myHealthAttachments, incompleteTasks
+      // For outbox the equivalent of senderName is recipient(s);
+      // Stanford may use 'recipientName' or similar — fall back through
+      // the legacy names just in case.
+      const id = m.id || m.Id || m.ID || m.MessageId || '';
+      const subject = m.title || m.subject || m.Title || m.Subject || '';
+      const otherParty = m.senderName || m.recipientName || m.toName
+                      || m.from || m.to || m.From || m.To || '';
+      const date = m.dateSent || m.dateTimeSent || m.dateReceived
+                || m.date || m.Date || '';
+      const isUnread = (m.read === false) || !!(m.IsUnread || m.unread);
       const isReply = /^re\\b/i.test(String(subject));
       return {
         folder,
@@ -659,8 +638,10 @@ class ScrapeJobs {
         date: String(date),
         isUnread,
         isReply,
+        hasAttachments: !!(m.myHealthAttachments || m.hasAttachments),
+        incompleteTasks: !!m.incompleteTasks,
       };
-    }).filter(r => r.id);  // drop entries where we couldn't find an ID
+    }).filter(r => r.id);
   }
 
   // Timing breakdown for the whole script — emitted in the final
