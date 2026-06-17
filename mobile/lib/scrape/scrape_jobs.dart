@@ -679,41 +679,49 @@ class ScrapeJobs {
     try {
       const allScripts = Array.from(document.querySelectorAll('script[src]'))
         .map(s => s.src).filter(u => u && /\\.js(\\?|\$)/i.test(u));
-      // Probe ALL JS scripts (up to 30) and try several needle variants.
-      // Stanford may construct the URL via concatenation or template,
-      // so look for variations of the path.
       const needleVariants = [
-        needle,                          // e.g. /Mailbox/Page
-        needle.replace(/^\\//, ''),       // Mailbox/Page (no leading slash)
-        needle.split('/').pop() + 'Page', // e.g. MailboxPage (camelCased)
-        needle.toLowerCase(),            // /mailbox/page
+        needle, needle.replace(/^\\//, ''),
+        needle.split('/').pop() + 'Page', needle.toLowerCase(),
       ];
-      const fetched = await Promise.all(allScripts.slice(0, 30).map(async url => {
+      // Per-script fetch result records (always populated, even on error)
+      // so we can see WHY a fetch failed when zero hits come back.
+      // Static JS bundles are public — drop credentials so the request
+      // isn't CORS-blocked as a cross-origin credentialed call.
+      const probeResults = await Promise.all(allScripts.slice(0, 30).map(async url => {
+        const t0 = Date.now();
         try {
-          const r = await fetch(url, { credentials: 'include' });
-          if (!r.ok) return null;
+          const r = await fetch(url, { mode: 'cors' });
+          if (!r.ok) return { url, status: r.status, error: 'http-' + r.status, ms: Date.now() - t0 };
           const text = await r.text();
-          return { url, text };
-        } catch (_) { return null; }
+          return { url, status: r.status, length: text.length, text, ms: Date.now() - t0 };
+        } catch (e) {
+          return { url, error: 'fetch-threw:' + ((e && e.message) || String(e)).slice(0, 80), ms: Date.now() - t0 };
+        }
       }));
       const hits = [];
       const probedUrls = [];
-      for (const f of fetched.filter(Boolean)) {
-        probedUrls.push({ url: f.url, length: f.text.length });
+      for (const p of probeResults) {
+        probedUrls.push({ url: p.url, length: p.length || 0,
+                          status: p.status || null, error: p.error || null,
+                          ms: p.ms });
+        if (!p.text) continue;
         for (const v of needleVariants) {
-          const idx = f.text.indexOf(v);
+          const idx = p.text.indexOf(v);
           if (idx >= 0) {
             hits.push({
-              url: f.url,
-              needle: v,
-              snippet: f.text.substring(Math.max(0, idx - 400), idx + 800),
+              url: p.url, needle: v,
+              snippet: p.text.substring(Math.max(0, idx - 400), idx + 800),
             });
-            break;  // one hit per script is enough
+            break;
           }
         }
       }
-      return { hits, probedCount: fetched.filter(Boolean).length,
-               totalScripts: allScripts.length, probedUrls };
+      return {
+        hits,
+        probedCount: probeResults.filter(p => p.text).length,
+        totalScripts: allScripts.length,
+        probedUrls,  // ALWAYS populated; tells us what we tried
+      };
     } catch (e) {
       return { error: (e && e.message) || String(e) };
     }
