@@ -680,6 +680,48 @@ class ScrapeJobs {
   const nextCursor = (mp && mp.more && mp.nextPageBeginMessageId)
     ? mp.nextPageBeginMessageId : null;
 
+  // PRIMER-AS-DIAGNOSTIC: if the API returned 0 rows on page 1 (no
+  // cursor), we've exhausted body guesses. Trigger the SPA to fire
+  // its OWN /Mailbox/Page or /Outbox/Page call so the XHR-body
+  // interception captures the exact body shape it uses. Adds ~3s
+  // to a folder we'd otherwise return empty for; the captured body
+  // ends up in the next emit's xhrLog and is what we need to hardcode.
+  //
+  // Only runs on first page of a folder (no cursor) AND only when
+  // rows == 0 — pagination/successful pages skip this entirely.
+  let primerForBodyCapture = null;
+  if (apiResult.ok && !cursor && (!apiRows || apiRows.length === 0)) {
+    primerForBodyCapture = [];
+    const t0p = Date.now();
+    function pLog(stage) { primerForBodyCapture.push({ stage, atMs: Date.now() - t0p }); }
+    pLog('primer-start');
+
+    function findFolderLinkRaw(targetFolder) {
+      const wantText = targetFolder === 'inbox' ? 'inbox' : 'sent';
+      const wantHref = targetFolder === 'inbox' ? '/messages/inbox' : '/messages/outbox';
+      return Array.from(document.querySelectorAll('a, [role="link"]')).find(a => {
+        const txt = (a.textContent || '').trim().toLowerCase();
+        const href = a.getAttribute('href') || '';
+        return txt === wantText && href.indexOf(wantHref) !== -1;
+      });
+    }
+
+    const oppositeFolder = folder === 'inbox' ? 'outbox' : 'inbox';
+    const oppLink = findFolderLinkRaw(oppositeFolder);
+    if (oppLink) {
+      oppLink.click();
+      pLog('clicked-opposite');
+      await new Promise(r => setTimeout(r, 1200));
+    } else { pLog('opposite-link-not-found'); }
+    const backLink = findFolderLinkRaw(folder);
+    if (backLink) {
+      backLink.click();
+      pLog('clicked-target');
+      await new Promise(r => setTimeout(r, 1500));
+    } else { pLog('target-link-not-found'); }
+    pLog('primer-done');
+  }
+
   // SHORT-CIRCUIT: if the API call succeeded (HTTP 200), trust its
   // answer — even if it returned 0 rows. The SPA priming + 30s DOM
   // long-poll exists only as a fallback for the case where the API is
@@ -708,6 +750,7 @@ class ScrapeJobs {
         attempts: apiResult.attempts || null,
         more: !!(mp && mp.more),
       },
+      primerForBodyCapture,  // null on success path; populated on 0-row path
       rowSource: (apiRows && apiRows.length > 0) ? 'api' : 'api-empty',
       timings,
       error: (apiRows && apiRows.length > 0) ? null : 'api-returned-zero-rows',
