@@ -498,35 +498,28 @@ class ScrapeJobs {
   // Each candidate is tried in sequence; first one that returns rows
   // wins. Cursor pagination overrides the body entirely.
   function bodyCandidatesFor(folder, cursor) {
-    if (cursor) {
-      // Stanford returns `currentPageBeginMessageId` + `nextPageBeginMessageId`
-      // in the response. The request field that ADVANCES the cursor is
-      // unknown — try the most plausible. Success requires the response
-      // cursor to differ from the input cursor (handled below).
+    // Confirmed: Stanford's SPA always sends {"payload": false} on the
+    // first page (captured via primer-triggered XHR-body interception).
+    // Our prior {} request was accepted as syntactically valid but
+    // treated as "no request" → empty result for inbox; outbox happened
+    // to default to first page. Either way, payload: false is the
+    // canonical first-page body.
+    if (!cursor) {
       return [
-        { currentPageBeginMessageId: cursor },
-        { beginMessageId: cursor },
-        { nextPageBeginMessageId: cursor },
-        { pageBeginMessageId: cursor },
-        { startMessageId: cursor },
+        { payload: false },
       ];
     }
-    if (folder === 'inbox') {
-      return [
-        {},
-        { folder: 'Inbox' },
-        { folder: 'inbox' },
-        { folderName: 'Inbox' },
-        { folderType: 'inbox' },
-        { mailboxFolder: 'Inbox' },
-        { mailboxFolderId: 1 },
-        { mailboxFolderId: 0 },
-        { view: 'Inbox' },
-        { includeRead: true, includeUnread: true },
-        { archived: false, deleted: false },
-      ];
-    }
-    return [{}];
+    // For pagination: the SPA wraps the cursor INSIDE the payload object
+    // (the false → object transition signals "this is a real request").
+    // Try the most plausible cursor field names; success requires the
+    // response cursor to differ from the input.
+    return [
+      { payload: { beginMessageId: cursor } },
+      { payload: { currentPageBeginMessageId: cursor } },
+      { payload: { nextPageBeginMessageId: cursor } },
+      { payload: { pageBeginMessageId: cursor } },
+      { payload: { startMessageId: cursor } },
+    ];
   }
 
   async function fetchOnce(endpoint, body) {
