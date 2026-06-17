@@ -262,7 +262,11 @@
   .msg-layout { display: flex; gap: 16px; min-height: calc(100vh - 130px); align-items: stretch; }
   .msg-list-pane { width: 340px; flex-shrink: 0; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); display: flex; flex-direction: column; max-height: calc(100vh - 130px); overflow: hidden; }
   .msg-list-header { padding: 12px; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 6px; }
-  .msg-list-header input { padding: 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; }
+  .msg-filter-wrap { position: relative; }
+  .msg-list-header input { width: 100%; padding: 8px 28px 8px 10px; border: 1px solid #d0d0d0; border-radius: 6px; font-size: 13px; box-sizing: border-box; }
+  .msg-filter-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: #d0d0d0; color: white; border: none; width: 18px; height: 18px; border-radius: 50%; font-size: 12px; line-height: 16px; padding: 0; cursor: pointer; display: none; }
+  .msg-filter-clear:hover { background: #999; }
+  .msg-filter-wrap.has-text .msg-filter-clear { display: block; }
   .msg-list-stats { font-size: 11px; color: #888; }
   .msg-list { flex: 1; overflow-y: auto; }
   .msg-conv { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
@@ -279,7 +283,7 @@
   .msg-thread-pane { flex: 1; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); display: flex; flex-direction: column; max-height: calc(100vh - 130px); overflow: hidden; }
   .msg-thread-empty { padding: 40px; color: #999; text-align: center; font-size: 13px; margin: auto; }
   .msg-thread { display: flex; flex-direction: column; height: 100%; }
-  .msg-thread-header { padding: 14px 18px; border-bottom: 1px solid #eee; }
+  .msg-thread-header { padding: 14px 18px; border-bottom: 1px solid #eee; background: white; }
   .msg-thread-header h2 { margin: 0 0 4px 0; font-size: 15px; color: #1a1a2e; }
   .msg-thread-header .msg-thread-meta { font-size: 12px; color: #666; }
   .msg-thread-bubbles { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; background: #f6f7f9; }
@@ -294,9 +298,12 @@
   .msg-bubble.inbound .msg-bubble-time { color: #888; }
   .msg-bubble.outbound .msg-bubble-time { color: rgba(255,255,255,0.85); }
 
-  /* Back-to-list button — only visible on narrow viewports */
-  .msg-back-btn { display: none; background: none; border: none; color: #4889ad; font-size: 13px; cursor: pointer; padding: 4px 0; margin-bottom: 6px; }
-  .msg-back-btn:hover { text-decoration: underline; }
+  /* Back-to-list button — only visible on narrow viewports. Real
+     button appearance (pill with bg + border) so it reads as
+     actionable rather than as a text link. */
+  .msg-back-btn { display: none; background: #f1f4f7; border: 1px solid #d0d8e0; color: #4889ad; font-size: 13px; font-weight: 500; cursor: pointer; padding: 6px 12px; border-radius: 16px; margin-bottom: 10px; }
+  .msg-back-btn:hover { background: #e4eaf0; }
+  .msg-back-btn:active { background: #d0d8e0; }
 
   /* Single-pane mobile layout: <800px viewport shows ONE pane at a
      time. Default state = list visible, thread hidden. Body class
@@ -316,6 +323,11 @@
     body.msg-thread-open .msg-list-pane { display: none; }
     body.msg-thread-open .msg-thread-pane { display: flex; }
     .msg-back-btn { display: inline-block; }
+    /* Sticky header so the back button + subject stay reachable while
+       the bubbles scroll. The thread pane has overflow:visible on
+       mobile so this sticks against the page (viewport top), not
+       against a scroll container. */
+    .msg-thread-header { position: sticky; top: 0; z-index: 10; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
   }
 
   /* ── Timeline page ── */
@@ -1512,8 +1524,13 @@
   <div class="msg-layout">
     <aside class="msg-list-pane">
       <div class="msg-list-header">
-        <input type="text" id="msg-filter" placeholder="Filter conversations…"
-               oninput="renderMsgConversationList()">
+        <div class="msg-filter-wrap" id="msg-filter-wrap">
+          <input type="search" id="msg-filter" placeholder="Filter conversations…"
+                 oninput="onMsgFilterInput()">
+          <button class="msg-filter-clear" type="button"
+                  onclick="clearMsgFilter()" title="Clear filter"
+                  aria-label="Clear filter">×</button>
+        </div>
         <div class="msg-list-stats" id="msg-list-stats"></div>
       </div>
       <div class="msg-list" id="msg-list"></div>
@@ -2253,6 +2270,26 @@ function fmtMsgBubbleDate(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function onMsgFilterInput() {
+  // Toggle the clear-X visibility (CSS-driven via parent class) and
+  // re-render the list.
+  const wrap = document.getElementById('msg-filter-wrap');
+  const filterEl = document.getElementById('msg-filter');
+  if (wrap && filterEl) {
+    wrap.classList.toggle('has-text', filterEl.value.length > 0);
+  }
+  renderMsgConversationList();
+}
+
+function clearMsgFilter() {
+  const filterEl = document.getElementById('msg-filter');
+  if (filterEl) filterEl.value = '';
+  const wrap = document.getElementById('msg-filter-wrap');
+  if (wrap) wrap.classList.remove('has-text');
+  renderMsgConversationList();
+  if (filterEl) filterEl.focus();
 }
 
 function renderMsgConversationList() {
