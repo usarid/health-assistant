@@ -499,20 +499,31 @@ class ScrapeJobs {
   // wins. Cursor pagination overrides the body entirely.
   function bodyCandidatesFor(folder, cursor) {
     if (cursor) {
+      // Stanford returns `currentPageBeginMessageId` + `nextPageBeginMessageId`
+      // in the response. The request field that ADVANCES the cursor is
+      // unknown — try the most plausible. Success requires the response
+      // cursor to differ from the input cursor (handled below).
       return [
+        { currentPageBeginMessageId: cursor },
         { beginMessageId: cursor },
         { nextPageBeginMessageId: cursor },
-        { currentPageBeginMessageId: cursor },
+        { pageBeginMessageId: cursor },
+        { startMessageId: cursor },
       ];
     }
     if (folder === 'inbox') {
       return [
         {},
         { folder: 'Inbox' },
+        { folder: 'inbox' },
         { folderName: 'Inbox' },
+        { folderType: 'inbox' },
+        { mailboxFolder: 'Inbox' },
         { mailboxFolderId: 1 },
         { mailboxFolderId: 0 },
+        { view: 'Inbox' },
         { includeRead: true, includeUnread: true },
+        { archived: false, deleted: false },
       ];
     }
     return [{}];
@@ -550,13 +561,28 @@ class ScrapeJobs {
       const t0attempt = Date.now();
       const r = await fetchOnce(endpoint, body);
       const rows = (r.ok && r.data) ? extractRowsFromApiResponse(r.data) : null;
+      const mp = r.data && r.data.myHealthMailboxPage;
+      const responseCursor = (mp && mp.nextPageBeginMessageId) || null;
+      // Stanford's server-side status; e.g. {code: 1} usually means OK,
+      // negative codes signal auth/permission/validation failures.
+      const metaCode = (r.data && r.data.meta && r.data.meta.code) ?? null;
       attempts.push({
         body, status: r.status || null, ok: r.ok || false,
         rowsExtracted: rows ? rows.length : 0,
         elapsedMs: Date.now() - t0attempt,
+        responseCursor,
+        metaCode,
       });
       if (r.ok) lastSuccess = { result: r, rows };
-      if (rows && rows.length > 0) return { ...lastSuccess.result, rows, attempts };
+      // Success criterion differs for paginated vs first-page calls:
+      //   - First page (no cursor): any rows returned wins.
+      //   - Paginated (cursor sent): rows AND a different cursor returned.
+      //     If responseCursor === cursor, Stanford ignored our body shape
+      //     and returned the same page again — keep trying other candidates.
+      const advanced = !cursor || responseCursor !== cursor;
+      if (rows && rows.length > 0 && advanced) {
+        return { ...lastSuccess.result, rows, attempts };
+      }
     }
     // No candidate produced rows. Return the last successful response
     // (for shape diagnostics) or the last failure.
