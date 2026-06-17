@@ -300,11 +300,19 @@
 
   /* Single-pane mobile layout: <800px viewport shows ONE pane at a
      time. Default state = list visible, thread hidden. Body class
-     'msg-thread-open' flips them when a conversation is opened. */
+     'msg-thread-open' flips them when a conversation is opened.
+     On mobile we drop the height-capped scroll containers and let
+     the page body scroll the whole pane naturally — the nested
+     flex+overflow chain breaks in iOS webviews where 100vh can
+     include the chrome toolbars and inner scrolling is unreliable
+     (long threads get cut off with no scrollbar). */
   @media (max-width: 800px) {
-    .msg-layout { gap: 0; flex-direction: column; }
-    .msg-list-pane { width: 100%; max-height: calc(100vh - 130px); }
-    .msg-thread-pane { display: none; max-height: calc(100vh - 130px); }
+    .msg-layout { gap: 0; flex-direction: column; min-height: 0; }
+    .msg-list-pane { width: 100%; max-height: none; overflow: visible; }
+    .msg-list { overflow-y: visible; }
+    .msg-thread-pane { display: none; max-height: none; overflow: visible; }
+    .msg-thread { height: auto; }
+    .msg-thread-bubbles { overflow-y: visible; max-height: none; }
     body.msg-thread-open .msg-list-pane { display: none; }
     body.msg-thread-open .msg-thread-pane { display: flex; }
     .msg-back-btn { display: inline-block; }
