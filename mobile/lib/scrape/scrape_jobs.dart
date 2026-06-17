@@ -498,27 +498,37 @@ class ScrapeJobs {
   // Each candidate is tried in sequence; first one that returns rows
   // wins. Cursor pagination overrides the body entirely.
   function bodyCandidatesFor(folder, cursor) {
-    // Confirmed: Stanford's SPA always sends {"payload": false} on the
-    // first page (captured via primer-triggered XHR-body interception).
-    // Our prior {} request was accepted as syntactically valid but
-    // treated as "no request" → empty result for inbox; outbox happened
-    // to default to first page. Either way, payload: false is the
-    // canonical first-page body.
     if (!cursor) {
-      return [
-        { payload: false },
-      ];
+      return [{ payload: false }];
     }
-    // For pagination: the SPA wraps the cursor INSIDE the payload object
-    // (the false → object transition signals "this is a real request").
-    // Try the most plausible cursor field names; success requires the
-    // response cursor to differ from the input.
+    // Broad pagination net — the 5 narrow variants all returned 0 rows
+    // with the cursor field accepted but interpreted as a filter. Try
+    // more shapes: cursor outside payload, cursor as bare value, cursor
+    // stripped of the ^ suffix, cursor field combined with payload:false,
+    // additional pagination hints (direction, page-N), and the chance
+    // that calling /Mailbox/Page twice with the same body advances via
+    // server-side cursor state.
+    const bareCursor = String(cursor).replace(/\\^/g, '');
     return [
+      // Cursor as a stateful re-call (server keeps its own cursor)
+      { payload: false },
+      // Cursor inside payload (already tried in prior round, kept for shape parity)
       { payload: { beginMessageId: cursor } },
       { payload: { currentPageBeginMessageId: cursor } },
       { payload: { nextPageBeginMessageId: cursor } },
-      { payload: { pageBeginMessageId: cursor } },
-      { payload: { startMessageId: cursor } },
+      // Stripped of ^ suffix
+      { payload: { beginMessageId: bareCursor } },
+      { payload: { currentPageBeginMessageId: bareCursor } },
+      // Direction / page-N hints
+      { payload: { beginMessageId: cursor, direction: 'next' } },
+      { payload: { beginMessageId: cursor, pageDirection: 'forward' } },
+      { payload: { currentPageBeginMessageId: cursor, pageNum: 2 } },
+      // Cursor outside payload
+      { payload: false, beginMessageId: cursor },
+      { payload: false, currentPageBeginMessageId: cursor },
+      // No payload wrapper at all
+      { beginMessageId: cursor },
+      { currentPageBeginMessageId: cursor },
     ];
   }
 
@@ -658,6 +668,43 @@ class ScrapeJobs {
   const timings = {};
   function mark(label, ms) { timings[label] = ms; }
 
+  // JS-bundle grep — one-shot when we have a cursor (i.e., page 2+).
+  // Fetches the SPA's own JS sources, finds any usage of /Mailbox/Page,
+  // and returns a snippet of surrounding code. The SPA's pagination
+  // call shape is constructed in there; reading the grep result tells
+  // us the exact body without needing to simulate a scroll on the
+  // rendered list. Runs only on pagination pages to avoid the cost on
+  // first-page success.
+  async function grepSpaJs(needle) {
+    try {
+      const scripts = Array.from(document.querySelectorAll('script[src]'))
+        .map(s => s.src)
+        .filter(u => u && (/signedin|messag|mailbox|inbox|app/i.test(u)));
+      const hits = [];
+      // Try a handful in parallel; cap response size per script
+      const fetched = await Promise.all(scripts.slice(0, 8).map(async url => {
+        try {
+          const r = await fetch(url, { credentials: 'include' });
+          if (!r.ok) return null;
+          const text = await r.text();
+          return { url, text };
+        } catch (_) { return null; }
+      }));
+      for (const f of fetched.filter(Boolean)) {
+        const idx = f.text.indexOf(needle);
+        if (idx >= 0) {
+          hits.push({
+            url: f.url,
+            snippet: f.text.substring(Math.max(0, idx - 400), idx + 800),
+          });
+        }
+      }
+      return hits;
+    } catch (e) {
+      return [{ error: (e && e.message) || String(e) }];
+    }
+  }
+
   // Make the API call NOW, before priming the SPA — if it works we're
   // done in <1s and the SPA priming is moot.
   const apiStart = Date.now();
@@ -672,6 +719,17 @@ class ScrapeJobs {
   const mp = apiResult.data && apiResult.data.myHealthMailboxPage;
   const nextCursor = (mp && mp.more && mp.nextPageBeginMessageId)
     ? mp.nextPageBeginMessageId : null;
+
+  // PAGINATION JS-GREP DIAGNOSTIC: when we have a cursor but no body
+  // variant advanced (responseCursor === cursor or empty), grep the
+  // SPA's JS bundle for /Mailbox/Page or /Outbox/Page references.
+  // The SPA's pagination call shape is in there; reading the snippet
+  // tells us the exact body format. Runs in ~1-2s.
+  let jsGrepHits = null;
+  if (cursor && apiResult.ok && (!apiRows || apiRows.length === 0)) {
+    const needle = folder === 'inbox' ? '/Mailbox/Page' : '/Outbox/Page';
+    jsGrepHits = await grepSpaJs(needle);
+  }
 
   // PRIMER-AS-DIAGNOSTIC: if the API returned 0 rows on page 1 (no
   // cursor), we've exhausted body guesses. Trigger the SPA to fire
@@ -744,6 +802,7 @@ class ScrapeJobs {
         more: !!(mp && mp.more),
       },
       primerForBodyCapture,  // null on success path; populated on 0-row path
+      jsGrepHits,             // populated only on pagination-stalled pages
       rowSource: (apiRows && apiRows.length > 0) ? 'api' : 'api-empty',
       timings,
       error: (apiRows && apiRows.length > 0) ? null : 'api-returned-zero-rows',
