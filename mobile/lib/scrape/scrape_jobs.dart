@@ -677,12 +677,18 @@ class ScrapeJobs {
   // first-page success.
   async function grepSpaJs(needle) {
     try {
-      const scripts = Array.from(document.querySelectorAll('script[src]'))
-        .map(s => s.src)
-        .filter(u => u && (/signedin|messag|mailbox|inbox|app/i.test(u)));
-      const hits = [];
-      // Try a handful in parallel; cap response size per script
-      const fetched = await Promise.all(scripts.slice(0, 8).map(async url => {
+      const allScripts = Array.from(document.querySelectorAll('script[src]'))
+        .map(s => s.src).filter(u => u && /\\.js(\\?|\$)/i.test(u));
+      // Probe ALL JS scripts (up to 30) and try several needle variants.
+      // Stanford may construct the URL via concatenation or template,
+      // so look for variations of the path.
+      const needleVariants = [
+        needle,                          // e.g. /Mailbox/Page
+        needle.replace(/^\\//, ''),       // Mailbox/Page (no leading slash)
+        needle.split('/').pop() + 'Page', // e.g. MailboxPage (camelCased)
+        needle.toLowerCase(),            // /mailbox/page
+      ];
+      const fetched = await Promise.all(allScripts.slice(0, 30).map(async url => {
         try {
           const r = await fetch(url, { credentials: 'include' });
           if (!r.ok) return null;
@@ -690,18 +696,26 @@ class ScrapeJobs {
           return { url, text };
         } catch (_) { return null; }
       }));
+      const hits = [];
+      const probedUrls = [];
       for (const f of fetched.filter(Boolean)) {
-        const idx = f.text.indexOf(needle);
-        if (idx >= 0) {
-          hits.push({
-            url: f.url,
-            snippet: f.text.substring(Math.max(0, idx - 400), idx + 800),
-          });
+        probedUrls.push({ url: f.url, length: f.text.length });
+        for (const v of needleVariants) {
+          const idx = f.text.indexOf(v);
+          if (idx >= 0) {
+            hits.push({
+              url: f.url,
+              needle: v,
+              snippet: f.text.substring(Math.max(0, idx - 400), idx + 800),
+            });
+            break;  // one hit per script is enough
+          }
         }
       }
-      return hits;
+      return { hits, probedCount: fetched.filter(Boolean).length,
+               totalScripts: allScripts.length, probedUrls };
     } catch (e) {
-      return [{ error: (e && e.message) || String(e) }];
+      return { error: (e && e.message) || String(e) };
     }
   }
 
@@ -721,14 +735,20 @@ class ScrapeJobs {
     ? mp.nextPageBeginMessageId : null;
 
   // PAGINATION JS-GREP DIAGNOSTIC: when we have a cursor but no body
-  // variant advanced (responseCursor === cursor or empty), grep the
-  // SPA's JS bundle for /Mailbox/Page or /Outbox/Page references.
-  // The SPA's pagination call shape is in there; reading the snippet
-  // tells us the exact body format. Runs in ~1-2s.
+  // variant ADVANCED the cursor, grep the SPA's JS bundles for the
+  // pagination call shape. The trigger is "responseCursor never differs
+  // from input cursor across any attempt" — i.e., Stanford ignored
+  // every body shape we tried. Row count is irrelevant; what matters is
+  // whether any attempt moved the cursor forward.
   let jsGrepHits = null;
-  if (cursor && apiResult.ok && (!apiRows || apiRows.length === 0)) {
-    const needle = folder === 'inbox' ? '/Mailbox/Page' : '/Outbox/Page';
-    jsGrepHits = await grepSpaJs(needle);
+  if (cursor && apiResult.ok) {
+    const attempts = apiResult.attempts || [];
+    const anyAdvanced = attempts.some(
+      a => a.responseCursor && a.responseCursor !== cursor);
+    if (!anyAdvanced) {
+      const needle = folder === 'inbox' ? '/Mailbox/Page' : '/Outbox/Page';
+      jsGrepHits = await grepSpaJs(needle);
+    }
   }
 
   // PRIMER-AS-DIAGNOSTIC: if the API returned 0 rows on page 1 (no
