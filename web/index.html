@@ -318,6 +318,16 @@
      include the chrome toolbars and inner scrolling is unreliable
      (long threads get cut off with no scrollbar). */
   @media (max-width: 800px) {
+    /* When a thread is open on mobile, lock the body to viewport
+       height with overflow hidden so ONLY the bubbles container
+       scrolls. Without this, even with the pane sized correctly,
+       default body margins and rounding push the total content
+       just past the viewport, letting the user scroll the whole
+       page (nav + status bar slide off the top, breaking the
+       "header stays put" illusion). Untouched on the list view
+       (no .msg-thread-open class) so list-page scrolls normally. */
+    body.msg-thread-open { overflow: hidden; height: 100vh; margin: 0; }
+    body.msg-thread-open #page-messages { height: 100vh; overflow: hidden; }
     .msg-layout { gap: 0; flex-direction: column; min-height: 0; }
     /* List pane: let the page body scroll normally (it's a vertical list
        of cards, page-scroll is fine, no header to keep in view). */
