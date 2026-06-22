@@ -1,9 +1,17 @@
-# Portal login autofill — userscripts
+# Portal-scout userscripts
 
-Browser-side analog of the mobile scraper's iOS-Keychain autofill. Lets us drive
-Stanford (and future portals) via the Chrome MCP without an AI ever entering
-credentials into a form. Credentials live in Tampermonkey's per-script local
-storage, isolated from the page DOM and never transmitted.
+Two scripts that together let us drive a logged-in patient portal through the
+Chrome MCP and reverse-engineer its data APIs, **without** any AI entering
+credentials or observing PHI in transit.
+
+1. **`stanford-login-autofill.user.js`** — browser-side analog of the mobile
+   scraper's iOS-Keychain autofill. Stores Stanford credentials in
+   Tampermonkey's per-script local storage and fills/submits the sign-in form
+   automatically.
+2. **`api-capture.user.js`** — recon helper that intercepts every fetch / XHR
+   on a portal page and records URL, method, headers, request body, response
+   body, plus every sessionStorage write. Captures download as a JSON file to
+   your Downloads folder for offline analysis.
 
 ## Trust posture
 
@@ -44,9 +52,32 @@ filled and submitted. You still complete MFA yourself.
   guard and re-runs).
 - **Wipe credentials**: Tampermonkey icon → "Clear Stanford credentials".
 
+## API capture — use
+
+1. Install `api-capture.user.js` the same way (Tampermonkey Dashboard → `+` →
+   paste → Cmd+S).
+2. Navigate to the portal page where you want to start observing (e.g. the
+   labs list).
+3. Tampermonkey icon → **"▶ Start API capture"**.
+4. Drive the UI as you normally would (click into a lab, scroll, paginate).
+   The script intercepts every fetch / XHR on Stanford/MyChart domains and
+   records full request + response bodies into Tampermonkey storage.
+5. Tampermonkey icon → **"■ Stop API capture"**.
+6. Tampermonkey icon → **"⤓ Download captures"** — a JSON file lands in your
+   Downloads folder (named `portal-captures-<ts>.json`). Move it under
+   `tools/portal-scout/captures/<portal>/<flow>/` for offline analysis; the
+   directory is gitignored.
+
+The script is portal-agnostic; the `@match` lines decide where it runs. Add
+more `@match` directives to point it at additional portals (UCSF, MSKCC, etc.).
+
 ## Adding another portal
 
-Each portal gets its own `<portal>-login-autofill.user.js`. Copy this script,
-update `@match`, the `KEY_USER`/`KEY_PASS` namespace prefix, and the menu
-labels. The form-detection heuristic (`input[type="password"]` + adjacent
-username field) covers most Epic MyChart-style portals without modification.
+Each portal gets its own `<portal>-login-autofill.user.js`. Copy
+`stanford-login-autofill.user.js`, update `@match`, the `KEY_USER`/`KEY_PASS`
+namespace prefix, and the menu labels. The form-detection heuristic
+(`input[type="password"]` + adjacent username field) covers most Epic
+MyChart-style portals without modification.
+
+The API capture script is shared — extend its `@match` list rather than
+forking it.
