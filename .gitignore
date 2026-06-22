@@ -56,6 +56,11 @@ tools/v2/patient_config/patient_identity.json
 # Live scraped output (contains full clinical note HTML; never commit)
 tools/v3/out/
 
+# ── portal-scout ──
+# Raw captures of XHRs / DOM snapshots from authenticated portal sessions.
+# Used to reverse-engineer scrapers; contain PHI; never commit.
+tools/portal-scout/captures/
+
 # ── mobile/ (Flutter project — keep source, ignore build/Pods/etc) ──
 mobile/.dart_tool/
 mobile/build/
