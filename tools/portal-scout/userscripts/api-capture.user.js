@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Portal API capture (Bina Health)
 // @namespace    https://github.com/usarid/BinaHealth
-// @version      0.2.0
+// @version      0.3.0
 // @description  Recon helper: intercepts every fetch / XHR on portal pages and
 //               records URL, method, headers, request body, response body, plus
 //               sessionStorage writes. Two control surfaces:
@@ -46,14 +46,50 @@
 
     if (window.__portalScout && window.__portalScout.installed) return;
 
-    const push = (rec) => {
+    // Cross-origin iframes can't share localStorage with the top frame, so
+    // subframes forward records to top via postMessage. The capture-active
+    // state is propagated the same way: top broadcasts down on every
+    // start/stop, children cache it locally.
+    const inTop = (window.top === window);
+    const MSG_TAG = '__portalScout__';
+
+    const appendLocal = (rec) => {
       try {
         const arr = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
         arr.push(rec);
         localStorage.setItem(LS_RECORDS, JSON.stringify(arr));
       } catch (e) { /* swallow — quota etc. */ }
     };
-    const active = () => localStorage.getItem(LS_STATE) === '1';
+    const push = inTop
+      ? appendLocal
+      : (rec) => { try { window.top.postMessage({ tag: MSG_TAG, type: 'rec', rec }, '*'); } catch (e) {} };
+
+    // Active flag — top is authoritative; subframes track via cached var.
+    // Subframes default to ACTIVE: they may install after the top frame's
+    // start() and need to capture immediate XHRs without waiting for the
+    // round-trip state response. Top still gates incoming records on its
+    // own state, so we never persist outside the actual capture window.
+    let subActive = true;
+    const active = inTop
+      ? () => localStorage.getItem(LS_STATE) === '1'
+      : () => subActive;
+
+    if (inTop) {
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.tag !== MSG_TAG) return;
+        // Gate: only persist subframe records during an active capture.
+        if (d.type === 'rec' && d.rec && active()) appendLocal(d.rec);
+      });
+    } else {
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.tag !== MSG_TAG) return;
+        if (d.type === 'state') subActive = !!d.active;
+      });
+      // Ask the top frame what the current state is.
+      try { window.top.postMessage({ tag: MSG_TAG, type: 'state-request' }, '*'); } catch (e) {}
+    }
     const now    = () => new Date().toISOString();
     const isAsset = (url) =>
       /\.(css|js|png|jpg|jpeg|svg|gif|woff2?|ttf|ico|map)(\?|$)/i.test(url);
@@ -173,11 +209,36 @@
       lastSnap = cur;
     }, 500);
 
+    // Helper to broadcast state changes down to all subframes (so the iframe
+    // hooks know whether to capture). Iterates one level of frames; nested
+    // frames receive it from their immediate parent if they also installed.
+    const broadcastState = (isActive) => {
+      try {
+        for (let i = 0; i < window.frames.length; i++) {
+          try { window.frames[i].postMessage({ tag: MSG_TAG, type: 'state', active: isActive }, '*'); } catch (e) {}
+        }
+      } catch (e) {}
+    };
+    if (inTop) {
+      // Re-broadcast state whenever a child asks (handles frames that loaded
+      // after a start() call).
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.tag !== MSG_TAG || d.type !== 'state-request') return;
+        try { e.source && e.source.postMessage({ tag: MSG_TAG, type: 'state', active: active() }, '*'); } catch (er) {}
+      });
+    }
+
     // ── Programmatic surface — drivable from Chrome MCP javascript_tool ─
+    // Only installed on the TOP frame; subframes are silent participants.
+    if (!inTop) {
+      window.__portalScout = { installed: true, _subframe: true };
+      return;
+    }
     window.__portalScout = {
       installed: true,
-      start: () => { localStorage.setItem(LS_RECORDS, '[]'); localStorage.setItem(LS_STATE, '1'); return 'started'; },
-      stop:  () => { localStorage.setItem(LS_STATE, '0'); return JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length; },
+      start: () => { localStorage.setItem(LS_RECORDS, '[]'); localStorage.setItem(LS_STATE, '1'); broadcastState(true);  return 'started'; },
+      stop:  () => { localStorage.setItem(LS_STATE, '0'); broadcastState(false); return JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length; },
       count: () => JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length,
       isActive: () => localStorage.getItem(LS_STATE) === '1',
       records:  () => JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'),
