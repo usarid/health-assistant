@@ -193,15 +193,17 @@ class LocalWriter {
     return file.path;
   }
 
-  /// Per-lab-result HTML body file — written once per fetched result
-  /// during the Phase 4-2 batch loop. Raw HTML, no JSON wrapper, since
-  /// the Phase 4-3 Python converter just needs to parse it.
-  static Future<String> writeLabBody(String eorderid, String html) async {
+  /// Per-lab-result JSON body — the GetDetails response for one eorderid.
+  /// Written once per fetched lab during the Phase 4-2 batch loop. The
+  /// Phase 4-3 Python ingest reads the JSON directly (resultComponents
+  /// for structured numerical labs, studyResult.contentAsHtml for
+  /// imaging/pathology bodies).
+  static Future<String> writeLabBody(String eorderid, Object details) async {
     final dir = await getApplicationDocumentsDirectory();
     final labDir = Directory('${dir.path}/labs');
     await labDir.create(recursive: true);
-    final file = File('${labDir.path}/stanford-lab-${_csnSlug(eorderid)}.html');
-    await file.writeAsString(html);
+    final file = File('${labDir.path}/stanford-lab-${_csnSlug(eorderid)}.json');
+    await file.writeAsString(jsonEncode({'eorderid': eorderid, 'details': details}));
     return file.path;
   }
 

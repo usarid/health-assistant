@@ -299,8 +299,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     return {'ok': true};
   }
 
-  /// JS handler for one fetched lab/imaging result HTML page (Phase 4-2).
-  /// Completes [_labDetailCompleter] with {eorderid, ok, html, attempts}.
+  /// JS handler for one fetched lab/imaging result via GetDetails (Phase 4-2).
+  /// Completes [_labDetailCompleter] with {eorderid, ok, status, details, attempts, timings}.
   Future<dynamic> _onLabDetailHandler(List<dynamic> args) async {
     if (args.isEmpty || args.first is! Map) return {'ok': false};
     final m = Map<String, dynamic>.from(args.first as Map);
@@ -994,18 +994,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       }
       final path = await LocalWriter.writeLabTestFetch(result);
       final ok = result['ok'] == true;
-      final len = (result['html'] ?? '').toString().length;
+      final details = result['details'];
+      final hasBody = details is Map &&
+          (details['results'] is List) &&
+          (details['results'] as List).isNotEmpty;
       setState(() => _status = 'Test fetch ${ok ? "OK" : "FAILED"} — '
-          'htmlLen=$len → $path');
+          'hasBody=$hasBody → $path');
     } finally {
       setState(() => _batchRunning = false);
     }
   }
 
-  /// Iterate every eorderid in the bundled stanford-lab-orders.json
-  /// asset and fetch its HTML detail page from mychart.stanfordhealthcare.org.
-  /// Per-result HTML files written immediately (crash-safe); manifest
-  /// rewritten per result; consolidated batch index at end.
+  /// Iterate every eorderid in the bundled stanford-lab-orders.json asset
+  /// and fetch its GetDetails JSON from mychart.stanfordhealthcare.org via
+  /// the reverse-engineered two-step API flow (see ScrapeJobs.stanfordLabDetail).
+  /// Per-result JSON files written immediately (crash-safe); consolidated
+  /// batch index at end.
   Future<void> _fetchAllLabBodies() async {
     if (_ctrl == null || !_onSignedInPage) return;
     if (_batchRunning) return;
@@ -1065,15 +1069,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           });
           continue;
         }
-        final html = (result['html'] ?? '').toString();
+        final details = result['details'];
+        if (details is! Map) {
+          errors.add({'eorderid': eorderid, 'reason': 'details-not-an-object'});
+          continue;
+        }
+        final resultsList = details['results'];
+        final hasBody = resultsList is List && resultsList.isNotEmpty;
         captured.add({
           'eorderid': eorderid,
           'code': code,
-          'htmlLength': html.length,
+          'hasBody': hasBody,
+          'resultCount': (resultsList is List) ? resultsList.length : 0,
           'capturedAt': DateTime.now().toUtc().toIso8601String(),
         });
-        await LocalWriter.writeLabBody(eorderid, html);
-        // Light pacing — labs HTML is ~137KB each; ~150-300ms is plenty
+        await LocalWriter.writeLabBody(eorderid, details);
+        // Light pacing — GetDetails is ~4KB JSON; ~150-300ms is plenty
         if (i + 1 < orders.length) {
           final pauseMs = 200 + rng.nextInt(300);
           await Future.delayed(Duration(milliseconds: pauseMs));

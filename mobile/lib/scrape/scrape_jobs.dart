@@ -1367,68 +1367,113 @@ class ScrapeJobs {
   /// the user's DevTools capture: the legacy `/inside.asp?mode=labdetail`
   /// 302-redirects to this modern URL.
   ///
-  /// Cross-origin to `mychart.stanfordhealthcare.org` — the WebView is
-  /// authenticated against `myhealth.stanfordhealthcare.org`, and the
-  /// response carries `Access-Control-Allow-Origin: https://myhealth.
-  /// stanfordhealthcare.org` + `Access-Control-Allow-Credentials: true`,
-  /// so `fetch(... { credentials: 'include' })` is the right call.
+  /// Reverse-engineered via Chrome MCP recon (2026-06-23; see
+  /// tools/portal-scout/captures/stanford/labs/). The SSO deep-link page
+  /// is just an SPA shell; the real body lives in the JSON returned by
+  /// POST /myhealth_sso/api/test-results/GetDetails.
   ///
-  /// JS-side does NO parsing — saves the raw HTML, lets the Python
-  /// converter (Phase 4-3, with BeautifulSoup) extract structured
-  /// fields server-side. Simpler JS, cleaner separation.
+  /// Two-step flow:
+  ///   1. Fetch the SSO shell HTML once per session, regex out the
+  ///      `__RequestVerificationToken` hidden field, cache on `window`.
+  ///   2. For each eorderid, POST GetDetails with body
+  ///      `{ orderKey, organizationID:"", PageNonce }`. The response
+  ///      JSON carries `results[0].studyResult.{narrative,impression,
+  ///      combinedRTFNarrativeImpression}.contentAsHtml`, plus
+  ///      `resultComponents[]` for structured numerical labs.
+  ///
+  /// `orderKey` is the URL-decoded form of `eorderid`. Cross-origin —
+  /// `Access-Control-Allow-Origin: https://myhealth.stanfordhealthcare.org`
+  /// and `Allow-Credentials: true`, so `fetch(..., {credentials: 'include'})`
+  /// works from the wrapper-origin WebView.
   ///
   /// Result via callHandler('labDetail', payload):
-  ///   { eorderid, ok, status, html, error?, attempts, timings }
+  ///   { eorderid, ok, status, details, error?, attempts, timings }
+  /// where `details` is the parsed GetDetails JSON.
   static String stanfordLabDetail({required String eorderid}) {
     final eorderidJs = "'${eorderid.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
     return '''
 (async () => {
   const eorderid = $eorderidJs;
   const t0 = Date.now();
+  const attempts = [];
 
   function emit(payload) {
     if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
       window.flutter_inappwebview.callHandler('labDetail', payload);
     }
   }
+  function fail(error, extra) {
+    emit({ eorderid, ok: false, error, attempts, timings: { totalMs: Date.now() - t0 }, ...(extra || {}) });
+  }
+  function randomHex(n) {
+    const a = new Uint8Array(n / 2);
+    crypto.getRandomValues(a);
+    return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
+  }
 
-  // Modern URL (direct — skips the legacy inside.asp 302 redirect).
-  const url = 'https://mychart.stanfordhealthcare.org/myhealth_sso/app/test-results/details'
-    + '?lang=en-US&eorderid=' + encodeURIComponent(eorderid);
-
-  const attempts = [];
-  try {
-    const tAttempt = Date.now();
-    const resp = await fetch(url, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { 'Accept': 'text/html,application/xhtml+xml' },
-    });
-    const html = await resp.text();
-    attempts.push({
-      url, status: resp.status, ok: resp.ok,
-      htmlLength: html.length,
-      elapsedMs: Date.now() - tAttempt,
-    });
-    if (resp.ok && html.length > 0) {
-      emit({
-        eorderid, ok: true, status: resp.status, html,
-        attempts, timings: { totalMs: Date.now() - t0 },
-      });
-      return;
+  // Step 1 — ensure verification token. Cache on window for the WebView session.
+  const TOKEN_CACHE = '__binaStanfordRVT';
+  let token = window[TOKEN_CACHE];
+  if (!token) {
+    const tT = Date.now();
+    const shellUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/app/test-results/details'
+      + '?lang=en-US&eorderid=' + encodeURIComponent(eorderid);
+    try {
+      const shellResp = await fetch(shellUrl, { credentials: 'include', headers: { 'Accept': 'text/html' } });
+      const shellHtml = await shellResp.text();
+      attempts.push({ step: 'shell-fetch', url: shellUrl, status: shellResp.status, htmlLength: shellHtml.length, elapsedMs: Date.now() - tT });
+      if (!shellResp.ok) return fail('shell-non-ok', { status: shellResp.status });
+      const m = shellHtml.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+      if (!m) return fail('token-not-found-in-shell');
+      token = m[1];
+      window[TOKEN_CACHE] = token;
+    } catch (e) {
+      return fail('shell-fetch-failed', { message: (e && e.message) || String(e) });
     }
-    emit({
-      eorderid, ok: false, status: resp.status,
-      error: 'non-ok-or-empty', html: '',
-      attempts, timings: { totalMs: Date.now() - t0 },
+  } else {
+    attempts.push({ step: 'shell-cached', tokenLen: token.length });
+  }
+
+  // Step 2 — POST GetDetails. orderKey = URL-decoded eorderid.
+  const orderKey = decodeURIComponent(eorderid);
+  const tD = Date.now();
+  const apiUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/api/test-results/GetDetails';
+  const body = JSON.stringify({ orderKey, organizationID: '', PageNonce: randomHex(32) });
+  let detailsResp, details;
+  try {
+    detailsResp = await fetch(apiUrl, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        '__RequestVerificationToken': token,
+      },
+      body,
     });
   } catch (e) {
-    emit({
-      eorderid, ok: false, error: 'fetch-failed',
-      message: (e && e.message) || String(e),
-      attempts, timings: { totalMs: Date.now() - t0 },
-    });
+    return fail('details-fetch-failed', { message: (e && e.message) || String(e) });
   }
+  const detailsText = await detailsResp.text();
+  attempts.push({ step: 'getdetails', url: apiUrl, status: detailsResp.status, ok: detailsResp.ok, respLength: detailsText.length, elapsedMs: Date.now() - tD });
+
+  // If the token went stale (Epic rotates them), clear cache so the next call refetches.
+  if (detailsResp.status === 401 || detailsResp.status === 403 || detailsResp.status === 419) {
+    delete window[TOKEN_CACHE];
+    return fail('details-auth-failed', { status: detailsResp.status });
+  }
+  if (!detailsResp.ok) return fail('details-non-ok', { status: detailsResp.status });
+
+  try {
+    details = JSON.parse(detailsText);
+  } catch (e) {
+    return fail('details-json-parse-failed', { message: (e && e.message) || String(e), respPreview: detailsText.slice(0, 200) });
+  }
+
+  emit({
+    eorderid, ok: true, status: detailsResp.status, details,
+    attempts, timings: { totalMs: Date.now() - t0 },
+  });
 })();
 ''';
   }
