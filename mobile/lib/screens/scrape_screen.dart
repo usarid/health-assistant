@@ -40,10 +40,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   bool _batchRunning = false;
   bool _abortRequested = false;
 
-  // Single-visit test CSN (kept from iteration 1 so we can spot-check)
-  static const String _testCsn =
-      'WP-242cylB3JEw7-2F-2FQUxFt6Xmsg-3D-3D-24uWtvS9-2FNhwMvYRaT4g0QO20SzIPlEtu5R6S4k0Qya-2Fc-3D';
-
   // Completers that bridge JS lifecycle events into Dart's async/await
   Completer<void>? _navCompleter;
   Completer<Map<String, dynamic>>? _scrapeCompleter;
@@ -257,30 +253,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         foregroundColor: Colors.white,
       );
     }
-    if (!_onSignedInPage) return null;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        FloatingActionButton.extended(
-          heroTag: 'test',
-          onPressed: () => _scrapeOne(_testCsn),
-          icon: const Icon(Icons.science),
-          label: const Text('Test one'),
-          backgroundColor: Colors.grey.shade700,
-          foregroundColor: Colors.white,
-        ),
-        const SizedBox(height: 12),
-        FloatingActionButton.extended(
-          heroTag: 'batch',
-          onPressed: _scrapeAll,
-          icon: const Icon(Icons.cloud_download),
-          label: const Text('Scrape all'),
-          backgroundColor: Colors.teal,
-          foregroundColor: Colors.white,
-        ),
-      ],
-    );
+    // No FAB when not running — auto-scout handles the canonical path
+    // and the overflow menu carries the manual triggers (Test one /
+    // Scrape all / Discover messages / Run portal scout now / etc.).
+    return null;
   }
 
   /// Status-line builder. Splits the errors bucket into truly-empty
@@ -447,42 +423,75 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: ScrapeJobs.installApiCapture());
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.start();');
 
-      // 2. From the current signed-in page, enumerate same-origin links and
-      // keep only the clinical-data ones.
+      // 2. Let the SPA hydrate. Stanford's home is /signedin/home#/ — the
+      // nav is React-rendered after onLoadStop fires, so a few seconds of
+      // patience massively improves what we see.
+      setState(() => _status = 'Scout: waiting for SPA hydration (4s)…');
+      await Future.delayed(const Duration(seconds: 4));
+
+      // 3. Enumerate clickable elements (widened — covers SPAs that don't
+      // use real <a href>). Keep clinical-classified ones.
       setState(() => _status = 'Scout: enumerating sections from home…');
       final linksRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutEnumerateLinks());
       final linksDecoded = jsonDecode(linksRaw?.toString() ?? '{}');
       final allLinks = ((linksDecoded['links'] ?? const []) as List).cast<dynamic>();
+      final byKind = Map<String, dynamic>.from(linksDecoded['byKind'] ?? {});
       final clinical = allLinks
           .where((l) => l is Map && l['classification'] == 'clinical')
           .map<Map<String, dynamic>>((l) => Map<String, dynamic>.from(l as Map))
           .toList();
       setState(() {
         _batchTotal = clinical.length;
-        _status = 'Scout: ${clinical.length} clinical sections to visit';
+        _status = 'Scout: ${clinical.length} clinical sections to visit '
+            '(of ${allLinks.length} candidates)';
       });
       await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
         'phase': 'enumerated',
-        'totalLinks': allLinks.length,
+        'totalCandidates': allLinks.length,
         'clinicalLinks': clinical.length,
+        'byElementKind': byKind,
         'home': _currentUrl,
       });
 
-      // 3. Visit each clinical section in turn.
+      // If enumeration came back empty, write a "what was on the page"
+      // snapshot to the spec so we can debug without a re-run.
+      if (clinical.isEmpty) {
+        await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+          'phase': 'no-clinical-links',
+          'allCandidates': allLinks.take(30).toList(),
+        });
+      }
+
+      // 3. Split visitable (has href) vs click-only (must DOM-click). v1
+      // visits only the href-bearing set; click-only logged for later.
+      final visitable = clinical.where((l) => l['href'] != null).toList();
+      final clickOnly = clinical.where((l) => l['href'] == null).toList();
+      if (clickOnly.isNotEmpty) {
+        await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+          'phase': 'click-only-skipped',
+          'count': clickOnly.length,
+          'sample': clickOnly.take(10).map((l) => {
+            'text': l['text'], 'kind': l['elementKind'], 'hintSource': l['hintSource'],
+          }).toList(),
+        });
+      }
+
+      // Visit each href-bearing clinical section in turn.
       final sections = <Map<String, dynamic>>[];
-      for (var i = 0; i < clinical.length; i++) {
+      for (var i = 0; i < visitable.length; i++) {
         if (_abortRequested) {
-          setState(() => _status = 'Scout aborted at $i/${clinical.length}');
+          setState(() => _status = 'Scout aborted at $i/${visitable.length}');
           break;
         }
-        final link = clinical[i];
+        final link = visitable[i];
         final href = link['href'] as String;
         final label = (link['text'] as String? ?? '').isNotEmpty
             ? link['text']
             : (link['path'] ?? href);
         setState(() {
           _batchIndex = i + 1;
-          _status = 'Scout ${i + 1}/${clinical.length}: $label';
+          _batchTotal = visitable.length;
+          _status = 'Scout ${i + 1}/${visitable.length}: $label';
         });
 
         // Navigate. _navCompleter resolves in onLoadStop when the URL changes.
@@ -532,11 +541,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1-2026-06-23',
+        'scoutVersion': 'v1.1-2026-06-23',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
-        'sectionCount': sections.length,
+        'enumeration': {
+          'totalCandidates': allLinks.length,
+          'byElementKind': byKind,
+          'clinical': clinical.length,
+          'visited': sections.length,
+          'clickOnlySkipped': clickOnly.length,
+        },
+        'clickOnlyTargets': clickOnly,
         'sections': sections,
       };
       final path = await LocalWriter.writeScoutSpec(spec);
@@ -724,25 +740,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } catch (_) {
       // Page may have already navigated by the time JS runs — fine.
     }
-  }
-
-  // ── Single test scrape (preserves iteration-1 flow) ────────────────
-  Future<void> _scrapeOne(String csn) async {
-    if (_ctrl == null) return;
-    setState(() => _status = 'Test scrape: navigating…');
-    final res = await _scrapeOneVisit(csn);
-    if (res == null) {
-      setState(() => _status = 'Test scrape: navigation failed');
-      return;
-    }
-    final html = (res['html'] ?? '').toString();
-    final err = res['error']?.toString();
-    if (err != null && err.isNotEmpty) {
-      setState(() => _status = 'Test scrape failed: $err');
-      return;
-    }
-    final path = await LocalWriter.writeNote(csn, html);
-    setState(() => _status = 'Test scrape: ${html.length} chars → $path');
   }
 
   // ── The actual loop ────────────────────────────────────────────────

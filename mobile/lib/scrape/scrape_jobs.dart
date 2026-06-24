@@ -1805,33 +1805,103 @@ class ScrapeJobs {
 })();
 ''';
 
-  /// Enumerate same-origin links from the current page and classify each as
-  /// clinical-data | home | other | skip. Returns JSON-as-string with shape
-  /// `{ok, total, links: [{href, text, classification}]}`.
+  /// Enumerate clickable elements from the current page and classify each
+  /// as clinical-data | home | other | skip. Handles SPAs that don't use
+  /// real <a href> tags — also walks <button>, [role=link], [role=menuitem],
+  /// and [tabindex] elements, mining destination hints from click handler
+  /// source where available (e.g. `location.href = '/foo'`, `router.push('/foo')`,
+  /// data-href attributes, hash routes).
+  ///
+  /// Returns JSON-as-string with shape:
+  ///   {ok, total, byKind: {a,button,...}, links: [{href|null, text, path,
+  ///     classification, elementKind, hintSource}]}
+  /// Entries with href=null are click-only targets that the driver has to
+  /// dispatch via DOM .click() rather than direct navigation.
   static String scoutEnumerateLinks() => r'''
 (() => {
   function classify(path, text) {
-    const t  = ((text || '') + ' ' + (path || '')).toLowerCase();
+    const t = ((text || '') + ' ' + (path || '')).toLowerCase();
     if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert)\b/.test(t)) return 'skip';
     if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
-    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research)\b/.test(t)) return 'clinical';
+    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research|inbox|outbox|letter|chart|profile-?summary)\b/.test(t)) return 'clinical';
     if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
     return 'other';
   }
+  function visibleText(el) {
+    return (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '')
+      .trim().replace(/\s+/g, ' ').slice(0, 80);
+  }
+  function destinationHint(el) {
+    // Inline href / data-href / data-route / data-link
+    for (const attr of ['href', 'data-href', 'data-route', 'data-link', 'data-url']) {
+      const v = el.getAttribute && el.getAttribute(attr);
+      if (v) return {url: v, src: attr};
+    }
+    // onclick attribute (raw HTML attribute)
+    const onclickAttr = el.getAttribute && el.getAttribute('onclick');
+    if (onclickAttr) {
+      const m = onclickAttr.match(/['"](\/[^'"\s]+|#\/?[^'"\s]+|https?:\/\/[^'"\s]+)['"]/);
+      if (m) return {url: m[1], src: 'onclick-attr'};
+    }
+    // onclick property (JS-assigned)
+    const onclickFn = el.onclick;
+    if (typeof onclickFn === 'function') {
+      const src = onclickFn.toString();
+      const m = src.match(/['"](\/[^'"\s]+|#\/?[^'"\s]+|https?:\/\/[^'"\s]+)['"]/);
+      if (m) return {url: m[1], src: 'onclick-fn'};
+    }
+    // Angular/React routerLink attribute
+    for (const attr of ['routerLink', 'ng-href', 'ng-click', 'to']) {
+      const v = el.getAttribute && el.getAttribute(attr);
+      if (v) return {url: v, src: attr};
+    }
+    return null;
+  }
+  function makeAbsolute(url) {
+    try { return new URL(url, location.href).href; } catch (e) { return null; }
+  }
+
   const seen = new Set();
   const out  = [];
-  for (const a of document.querySelectorAll('a[href]')) {
-    let href = '';
-    try { href = new URL(a.getAttribute('href'), location.href).href; } catch (e) { continue; }
-    if (!href || !href.startsWith(location.origin)) continue;
-    if (seen.has(href)) continue;
-    seen.add(href);
-    const path = (new URL(href)).pathname;
-    const text = (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
-    const cls  = classify(path, text);
-    out.push({href, text, path, classification: cls});
+  const byKind = {};
+  const selectors = [
+    {sel: 'a[href]',                kind: 'a'},
+    {sel: 'button',                  kind: 'button'},
+    {sel: '[role="link"]',           kind: 'role-link'},
+    {sel: '[role="menuitem"]',       kind: 'role-menuitem'},
+    {sel: '[role="tab"]',            kind: 'role-tab'},
+    {sel: '[role="button"]',         kind: 'role-button'},
+    {sel: '[data-href]',             kind: 'data-href'},
+    {sel: '[data-route]',            kind: 'data-route'},
+    {sel: '[ng-click]',              kind: 'ng-click'},
+    {sel: '[routerlink], [routerLink]', kind: 'router-link'},
+  ];
+  for (const {sel, kind} of selectors) {
+    for (const el of document.querySelectorAll(sel)) {
+      const hint = destinationHint(el);
+      const text = visibleText(el);
+      const href = hint && hint.url ? makeAbsolute(hint.url) : null;
+      // Same-origin only (or relative-resolved within origin). External skipped.
+      if (href && !href.startsWith(location.origin) && !href.startsWith('#')) continue;
+      // Dedup by href when we have one; otherwise by (kind, text) — text alone
+      // is too loose. Always include if we have a hint.
+      const dedupKey = href || (kind + '|' + text);
+      if (seen.has(dedupKey)) continue;
+      // Tab/button without any destination hint AND empty text: useless — skip.
+      if (!hint && !text) continue;
+      seen.add(dedupKey);
+      const path = href ? (new URL(href)).pathname + (new URL(href)).hash : '';
+      const cls  = classify(path, text);
+      out.push({
+        href, text, path,
+        classification: cls,
+        elementKind: kind,
+        hintSource: hint ? hint.src : null,
+      });
+      byKind[kind] = (byKind[kind] || 0) + 1;
+    }
   }
-  return JSON.stringify({ok: true, total: out.length, links: out});
+  return JSON.stringify({ok: true, total: out.length, byKind, links: out});
 })();
 ''';
 
