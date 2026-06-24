@@ -57,6 +57,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   final List<CapturedNote> _captured = [];
   final List<ScrapeError> _errors = [];
   DateTime? _batchStartedAt;
+
+  // Portal-scout state
+  bool _autoScoutOnSignIn = true;   // single-user dev default; toggle in overflow menu
+  bool _scoutRanThisSession = false; // guards against re-fire on session re-login
+  bool _wasSignedIn = false;         // previous _onSignedInPage value for edge detection
   // CSN currently being scraped — surfaces in every noteDiag line so the
   // post-run JSONL ties emits back to a specific visit without anyone
   // needing to correlate timestamps.
@@ -97,6 +102,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'test-fetch-one-lab', child: Text('Test: fetch one lab body')),
               const PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (Stanford)')),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'toggle-auto-scout',
+                child: Text(_autoScoutOnSignIn
+                    ? 'Disable auto-scout on sign-in'
+                    : 'Enable auto-scout on sign-in'),
+              ),
+              const PopupMenuItem(value: 'run-portal-scout', child: Text('Run portal scout now')),
             ],
           ),
         ],
@@ -188,16 +201,29 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
                 final onSignedIn = urlStr.contains(StanfordConfig.signedInMarker);
+                final isFirstSignIn = onSignedIn && !_wasSignedIn;
                 setState(() {
                   _currentUrl = urlStr;
                   _onSignedInPage = onSignedIn;
-                  if (onSignedIn && !_batchRunning && !_status.startsWith('Scrape')) {
+                  _wasSignedIn = onSignedIn;
+                  if (onSignedIn && !_batchRunning && !_status.startsWith('Scrape') && !_status.startsWith('Scout')) {
                     _status = 'Logged in. Choose Test or Scrape All.';
                   }
                 });
                 // Resolve a pending navigation if this is the URL we asked for
                 if (_navCompleter != null && _navCompleter!.isCompleted == false) {
                   _navCompleter!.complete();
+                }
+                // Auto-scout fires once per session on the first unauth→auth
+                // transition. Gate also on the in-memory toggle and the
+                // "already ran this session" guard so a stale-session
+                // reauth doesn't re-fire.
+                if (isFirstSignIn && _autoScoutOnSignIn && !_scoutRanThisSession && !_batchRunning) {
+                  _scoutRanThisSession = true;
+                  // Let the home page settle before driving navigation.
+                  Future.delayed(const Duration(seconds: 2), () {
+                    if (mounted && _onSignedInPage && !_batchRunning) _runPortalScout();
+                  });
                 }
                 // If this looks like a login page (not signed in yet), inject
                 // the autofill + capture hook with any stored credentials.
@@ -396,6 +422,136 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     return {'ok': true};
   }
 
+  /// Autonomous portal sweep — installs the page-context API capture,
+  /// enumerates clinical-data links from the current (home) page,
+  /// navigates through each in turn, snapshots the section + drains the
+  /// captured XHRs, then writes one consolidated spec to disk.
+  ///
+  /// Once finished, the spec drives the host-side spec synthesizer
+  /// (`tools/portal-scout/...`) which generates per-resource scraper code.
+  /// For now we just collect; the per-section fetcher generation is the
+  /// follow-up. Aborting via the FAB stops between sections cleanly.
+  Future<void> _runPortalScout() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchStartedAt = DateTime.now();
+      _batchIndex = 0;
+      _batchTotal = 0;
+      _status = 'Scout: installing capture hook…';
+    });
+    try {
+      // 1. Install + start capture in the top frame (re-injection is a no-op).
+      await _ctrl!.evaluateJavascript(source: ScrapeJobs.installApiCapture());
+      await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.start();');
+
+      // 2. From the current signed-in page, enumerate same-origin links and
+      // keep only the clinical-data ones.
+      setState(() => _status = 'Scout: enumerating sections from home…');
+      final linksRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutEnumerateLinks());
+      final linksDecoded = jsonDecode(linksRaw?.toString() ?? '{}');
+      final allLinks = ((linksDecoded['links'] ?? const []) as List).cast<dynamic>();
+      final clinical = allLinks
+          .where((l) => l is Map && l['classification'] == 'clinical')
+          .map<Map<String, dynamic>>((l) => Map<String, dynamic>.from(l as Map))
+          .toList();
+      setState(() {
+        _batchTotal = clinical.length;
+        _status = 'Scout: ${clinical.length} clinical sections to visit';
+      });
+      await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+        'phase': 'enumerated',
+        'totalLinks': allLinks.length,
+        'clinicalLinks': clinical.length,
+        'home': _currentUrl,
+      });
+
+      // 3. Visit each clinical section in turn.
+      final sections = <Map<String, dynamic>>[];
+      for (var i = 0; i < clinical.length; i++) {
+        if (_abortRequested) {
+          setState(() => _status = 'Scout aborted at $i/${clinical.length}');
+          break;
+        }
+        final link = clinical[i];
+        final href = link['href'] as String;
+        final label = (link['text'] as String? ?? '').isNotEmpty
+            ? link['text']
+            : (link['path'] ?? href);
+        setState(() {
+          _batchIndex = i + 1;
+          _status = 'Scout ${i + 1}/${clinical.length}: $label';
+        });
+
+        // Navigate. _navCompleter resolves in onLoadStop when the URL changes.
+        _navCompleter = Completer<void>();
+        await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(href)));
+        try {
+          await _navCompleter!.future.timeout(const Duration(seconds: 12));
+        } on TimeoutException {
+          // Continue anyway — some pages don't fire onLoadStop cleanly
+          // (SPA route transitions). The snapshot+capture below will
+          // still grab whatever's there.
+        }
+
+        // Let in-flight XHRs settle. 3s catches most Epic dashboards.
+        await Future.delayed(const Duration(seconds: 3));
+
+        // Re-inject capture hook (new document) — keep existing localStorage
+        // state so accumulating records persists across navigation.
+        await _ctrl!.evaluateJavascript(source: ScrapeJobs.installApiCapture());
+
+        // Snapshot + drain.
+        final snapRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutSnapshotCurrent());
+        final snap = jsonDecode(snapRaw?.toString() ?? '{}');
+        final capsRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutGetCaptures(clear: true));
+        final caps = (jsonDecode(capsRaw?.toString() ?? '[]') as List).cast<dynamic>();
+
+        sections.add({
+          'requestedHref': href,
+          'requestedText': link['text'],
+          'classification': link['classification'],
+          'snapshot': snap,
+          'capturedXhrCount': caps.length,
+          'capturedXhrs': caps,
+        });
+        await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+          'phase': 'visited',
+          'i': i + 1,
+          'href': href,
+          'label': label,
+          'finalUrl': snap['url'],
+          'rowPatterns': (snap['rowPatterns'] as List?)?.length ?? 0,
+          'xhrCount': caps.length,
+        });
+      }
+
+      // 4. Stop capture + write the spec.
+      await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
+      final spec = {
+        'portal': 'stanford',
+        'scoutVersion': 'v1-2026-06-23',
+        'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
+        'finishedAt': DateTime.now().toUtc().toIso8601String(),
+        'home': _currentUrl,
+        'sectionCount': sections.length,
+        'sections': sections,
+      };
+      final path = await LocalWriter.writeScoutSpec(spec);
+      setState(() => _status = 'Scout done: ${sections.length} sections → $path');
+    } catch (e) {
+      setState(() => _status = 'Scout failed: $e');
+      await LocalWriter.appendScoutDiagLine(
+        _batchStartedAt ?? DateTime.now(),
+        {'phase': 'error', 'message': e.toString()},
+      );
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
   Future<void> _onMenuSelected(String value) async {
     if (value == 'forget-login') {
       final exists = await CredentialsStore.has('stanford');
@@ -435,6 +591,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _testFetchOneLab();
     } else if (value == 'fetch-all-lab-bodies') {
       await _fetchAllLabBodies();
+    } else if (value == 'toggle-auto-scout') {
+      setState(() => _autoScoutOnSignIn = !_autoScoutOnSignIn);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_autoScoutOnSignIn
+            ? 'Auto-scout enabled. Will run on next sign-in.'
+            : 'Auto-scout disabled. Use the menu item to run manually.'),
+        duration: const Duration(seconds: 3),
+      ));
+    } else if (value == 'run-portal-scout') {
+      _scoutRanThisSession = false; // allow manual re-trigger
+      await _runPortalScout();
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note

@@ -1618,4 +1618,262 @@ class ScrapeJobs {
 })();
 ''';
   }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // PORTAL SCOUT — mobile equivalent of the Chrome+Tampermonkey recon
+  // path. Same architecture (page-context fetch/XHR/sessionStorage hooks
+  // with cross-frame postMessage bridging), expressed as Dart-injected JS
+  // instead of a userscript. Once installed, the page exposes
+  //   window.__portalScout.{start, stop, count, records, clear}
+  // and Dart drives the autonomous portal walk via evaluateJavascript.
+  //
+  // Captures live in the top frame's localStorage (key 'portalscout.records')
+  // so they survive same-origin navigation between sections.
+  // ──────────────────────────────────────────────────────────────────────
+
+  /// Page-context capture hook — fetch, XHR, sessionStorage writes; subframes
+  /// forward records to top via postMessage. Re-injection on the same page
+  /// is a no-op (idempotent install).
+  static String installApiCapture() => r'''
+(() => {
+  const LS_STATE   = 'portalscout.active';
+  const LS_RECORDS = 'portalscout.records';
+  const MSG_TAG    = '__portalScout__';
+
+  function injectPage(fn, cfg) {
+    const s = document.createElement('script');
+    s.textContent = '(' + fn.toString() + ')(' + JSON.stringify(cfg) + ');';
+    (document.head || document.documentElement).appendChild(s);
+    s.remove();
+  }
+
+  function pageInstall(cfg) {
+    if (window.__portalScout && window.__portalScout.installed) return;
+
+    const LS_STATE   = cfg.lsState;
+    const LS_RECORDS = cfg.lsRecords;
+    const MSG_TAG    = cfg.msgTag;
+    const inTop      = (window.top === window);
+
+    function appendLocal(rec) {
+      try {
+        const arr = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
+        arr.push(rec);
+        localStorage.setItem(LS_RECORDS, JSON.stringify(arr));
+      } catch (e) {}
+    }
+    const push = inTop
+      ? appendLocal
+      : (rec) => { try { window.top.postMessage({tag: MSG_TAG, type: 'rec', rec}, '*'); } catch (e) {} };
+
+    // Subframes default ACTIVE — they may install after a top-frame start();
+    // top still gates incoming records on its own active() state.
+    let subActive = true;
+    const active = inTop
+      ? () => localStorage.getItem(LS_STATE) === '1'
+      : () => subActive;
+
+    if (inTop) {
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.tag !== MSG_TAG) return;
+        if (d.type === 'rec' && d.rec && active()) appendLocal(d.rec);
+        if (d.type === 'state-request') {
+          try { e.source && e.source.postMessage({tag: MSG_TAG, type: 'state', active: active()}, '*'); } catch (er) {}
+        }
+      });
+    } else {
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        if (!d || d.tag !== MSG_TAG) return;
+        if (d.type === 'state') subActive = !!d.active;
+      });
+      try { window.top.postMessage({tag: MSG_TAG, type: 'state-request'}, '*'); } catch (e) {}
+    }
+    function broadcastState(isActive) {
+      try {
+        for (let i = 0; i < window.frames.length; i++) {
+          try { window.frames[i].postMessage({tag: MSG_TAG, type: 'state', active: isActive}, '*'); } catch (e) {}
+        }
+      } catch (e) {}
+    }
+
+    const now      = () => new Date().toISOString();
+    const isAsset  = (url) => /\.(css|js|png|jpg|jpeg|svg|gif|woff2?|ttf|ico|map)(\?|$)/i.test(url);
+    const stringifyBody = (b) => {
+      if (b == null) return null;
+      if (typeof b === 'string') return b;
+      if (b instanceof URLSearchParams) return b.toString();
+      if (b instanceof FormData) {
+        const o = {}; for (const [k, v] of b.entries()) o[k] = (typeof v === 'string') ? v : '[Blob]';
+        return JSON.stringify(o);
+      }
+      if (b instanceof ArrayBuffer || ArrayBuffer.isView(b)) return '[binary ' + b.byteLength + 'b]';
+      try { return JSON.stringify(b); } catch (e) { return '[unserializable]'; }
+    };
+    const headersToObject = (h) => {
+      if (!h) return null;
+      if (h instanceof Headers) { const o = {}; for (const [k, v] of h.entries()) o[k] = v; return o; }
+      if (Array.isArray(h)) return Object.fromEntries(h);
+      if (typeof h === 'object') return { ...h };
+      return null;
+    };
+    const parseRespHeaders = (s) => {
+      const o = {};
+      (s || '').split('\r\n').forEach(line => {
+        const i = line.indexOf(':');
+        if (i > 0) o[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
+      });
+      return o;
+    };
+
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async function (input, init) {
+      const url    = (typeof input === 'string') ? input : (input && input.url) || String(input);
+      const method = (init && init.method) || (typeof input === 'object' && input.method) || 'GET';
+      const reqBody    = (init && init.body) || null;
+      const reqHeaders = headersToObject(init && init.headers) || {};
+      const t0 = performance.now();
+      const resp = await origFetch(input, init);
+      const dt = performance.now() - t0;
+      if (active() && !isAsset(url)) {
+        const clone = resp.clone();
+        let respBody = '';
+        try { respBody = await clone.text(); } catch (e) { respBody = '[read err]'; }
+        push({when: now(), kind: 'fetch', page: location.href, url, method,
+              reqHeaders, reqBody: stringifyBody(reqBody),
+              status: resp.status, respHeaders: headersToObject(resp.headers),
+              respContentType: resp.headers.get('content-type') || '',
+              respBody, durationMs: Math.round(dt)});
+      }
+      return resp;
+    };
+
+    const OrigXHR = window.XMLHttpRequest;
+    function CapturedXHR() {
+      const xhr = new OrigXHR();
+      const meta = {reqHeaders: {}, reqBody: null, method: 'GET', url: '', t0: 0};
+      const origOpen = xhr.open;
+      xhr.open = function (m, u) { meta.method = m; meta.url = u; return origOpen.apply(xhr, arguments); };
+      const origSet  = xhr.setRequestHeader;
+      xhr.setRequestHeader = function (k, v) { meta.reqHeaders[k] = v; return origSet.apply(xhr, arguments); };
+      const origSend = xhr.send;
+      xhr.send = function (body) {
+        meta.reqBody = body; meta.t0 = performance.now();
+        if (active() && !isAsset(meta.url)) {
+          xhr.addEventListener('loadend', () => {
+            const rh = parseRespHeaders(xhr.getAllResponseHeaders());
+            push({when: now(), kind: 'xhr', page: location.href, url: meta.url,
+                  method: meta.method, reqHeaders: meta.reqHeaders, reqBody: stringifyBody(meta.reqBody),
+                  status: xhr.status, respHeaders: rh,
+                  respContentType: rh['content-type'] || '',
+                  respBody: xhr.responseText, durationMs: Math.round(performance.now() - meta.t0)});
+          });
+        }
+        return origSend.apply(xhr, arguments);
+      };
+      return xhr;
+    }
+    CapturedXHR.prototype = OrigXHR.prototype;
+    Object.setPrototypeOf(CapturedXHR, OrigXHR);
+    window.XMLHttpRequest = CapturedXHR;
+
+    const origSetItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (k, v) {
+      if (active() && k !== LS_RECORDS && k !== LS_STATE) {
+        const area = (this === sessionStorage ? 'session' : (this === localStorage ? 'local' : 'other'));
+        push({when: now(), kind: 'storage', area, op: 'setItem', page: location.href,
+              key: k, valueLen: (v || '').length, valuePreview: String(v).slice(0, 200)});
+      }
+      return origSetItem.apply(this, arguments);
+    };
+
+    if (!inTop) { window.__portalScout = {installed: true, _subframe: true}; return; }
+    window.__portalScout = {
+      installed: true,
+      start: () => { localStorage.setItem(LS_RECORDS, '[]'); localStorage.setItem(LS_STATE, '1'); broadcastState(true);  return 'started'; },
+      stop:  () => { localStorage.setItem(LS_STATE, '0'); broadcastState(false); return JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length; },
+      count: () => JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length,
+      records: () => JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'),
+      clear: () => { localStorage.setItem(LS_RECORDS, '[]'); return 'cleared'; },
+      isActive: () => localStorage.getItem(LS_STATE) === '1',
+    };
+  }
+
+  injectPage(pageInstall, {lsState: LS_STATE, lsRecords: LS_RECORDS, msgTag: MSG_TAG});
+  return 'installed';
+})();
+''';
+
+  /// Enumerate same-origin links from the current page and classify each as
+  /// clinical-data | home | other | skip. Returns JSON-as-string with shape
+  /// `{ok, total, links: [{href, text, classification}]}`.
+  static String scoutEnumerateLinks() => r'''
+(() => {
+  function classify(path, text) {
+    const t  = ((text || '') + ' ' + (path || '')).toLowerCase();
+    if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert)\b/.test(t)) return 'skip';
+    if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
+    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research)\b/.test(t)) return 'clinical';
+    if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
+    return 'other';
+  }
+  const seen = new Set();
+  const out  = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    let href = '';
+    try { href = new URL(a.getAttribute('href'), location.href).href; } catch (e) { continue; }
+    if (!href || !href.startsWith(location.origin)) continue;
+    if (seen.has(href)) continue;
+    seen.add(href);
+    const path = (new URL(href)).pathname;
+    const text = (a.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    const cls  = classify(path, text);
+    out.push({href, text, path, classification: cls});
+  }
+  return JSON.stringify({ok: true, total: out.length, links: out});
+})();
+''';
+
+  /// Snapshot the currently-loaded page — URL, title, dominant heading, and
+  /// the row-like structural patterns. Used per-section during the scout.
+  static String scoutSnapshotCurrent() => r'''
+(() => {
+  function rowPatterns() {
+    const out = [];
+    for (const t of document.querySelectorAll('table')) {
+      const rows = (t.tBodies && t.tBodies[0] && t.tBodies[0].rows.length) || 0;
+      if (rows > 1) {
+        const headers = Array.from(t.querySelectorAll('thead th')).map(th => th.innerText.trim().slice(0, 30));
+        out.push({type: 'table', rowCount: rows, headers});
+      }
+    }
+    for (const u of document.querySelectorAll('ul, ol')) {
+      const items = u.querySelectorAll(':scope > li');
+      if (items.length > 2) out.push({type: u.tagName.toLowerCase(), itemCount: items.length});
+    }
+    const cards = document.querySelectorAll('[class*="card"], [class*="row"], [class*="result"], [data-testid*="row"], [data-testid*="card"]');
+    if (cards.length > 2) out.push({type: 'cards', count: cards.length});
+    return out;
+  }
+  return JSON.stringify({
+    url:         location.href,
+    title:       document.title,
+    pageHeading: (document.querySelector('h1, h2') && document.querySelector('h1, h2').innerText || '').trim().slice(0, 80),
+    rowPatterns: rowPatterns(),
+    bodyTextHead: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 400),
+  });
+})();
+''';
+
+  /// Pull the top frame's captured records out and (optionally) clear the
+  /// store so the next section gets a fresh slice.
+  static String scoutGetCaptures({bool clear = false}) => '''
+(() => {
+  if (!window.__portalScout) return '[]';
+  const recs = window.__portalScout.records();
+  ${clear ? 'window.__portalScout.clear();' : ''}
+  return JSON.stringify(recs);
+})();
+''';
 }

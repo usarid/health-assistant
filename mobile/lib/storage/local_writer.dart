@@ -290,6 +290,29 @@ class LocalWriter {
   }
 
   /// Append one diag event to the current batch's diag JSONL file. Each
+  /// Portal-scout spec — one JSON document per scout run. Captures the
+  /// portal's API surface as discovered by the autonomous crawl:
+  /// per-section URL, snapshot (title/heading/row patterns), and the raw
+  /// XHR capture records the api-capture hook collected while that section
+  /// was loaded. The host-side spec synthesizer reads this and emits
+  /// per-resource scraper code.
+  static Future<String> writeScoutSpec(Map<String, dynamic> spec) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final portal = (spec['portal'] ?? 'unknown').toString();
+    final file = File('${dir.path}/portal-scout-spec-$portal-$ts.json');
+    await file.writeAsString(jsonEncode(spec));
+    return file.path;
+  }
+
+  /// One unified line for the scout run's diagnostic log. Use the existing
+  /// per-diag-batch chain so concurrent appends from the bridge are
+  /// serialized. Pass the same batchStartedAt across the whole scout so
+  /// the file name is stable.
+  static Future<void> appendScoutDiagLine(DateTime batchStartedAt, Map<String, dynamic> event) =>
+      appendDiagLine(batchStartedAt, event);
+
+  /// One JSON line per discovered scout event. Each
   /// line is a self-contained JSON object — easy to grep/parse later.
   /// Metadata only (URL paths, lengths, counts); never note text or labels.
   /// File path includes the batch start timestamp so consecutive runs don't
