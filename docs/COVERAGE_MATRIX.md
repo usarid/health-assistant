@@ -7,8 +7,8 @@
 - Counts are point-in-time. Re-run the counts block (see Appendix) and bump "Last counts taken" whenever you update the matrix. Don't chase small drift.
 - Status changes get a one-line entry in the changelog at the bottom — keeps the history without bloating the matrix.
 
-**Last counts taken:** 2026-06-17 (HAPI on localhost:8090).
-**Coverage matrix version:** 1.
+**Last counts taken:** 2026-06-23 (HAPI on localhost:8090).
+**Coverage matrix version:** 2.
 
 ---
 
@@ -45,8 +45,8 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 | Appointment (future visits) | Stanford | 🟡 some in Home tab | n/a | **0** ❌ | ✅ rendered from `api/profile` | ⚠️ | Surfaced in UI but not stored as FHIR Appointment resources. Inconsistency worth fixing. |
 | Condition (problem list) | mixed | ✅ | ✅ | 65 | ✅ Profile | ✅ | Stable. |
 | Procedure | mixed | 🟡 | ❌ for non-trivial ones | **59** ❌ | ✅ list only | 🟡 list only | **Gap.** Colonoscopy (Jan 2026) example has no body — that report content lives in the Stanford pathology DR. Need same per-result body scrape as labs (Phase 4). |
-| Observation | mixed | ✅ | ✅ | 36,436 | ✅ Search, Profile vitals | ✅ | Strong. Quality patches in `DATA_QUALITY_CHECKLIST.md`. |
-| DiagnosticReport (lab/imaging/path) | Stanford, MSKCC, LabCorp | ✅ 489 from Stanford as `urn:stanford:myhealth:order` | ⚠️ **in flight (Phase 4)** | 2,103 | ✅ Search | ⚠️ bodies missing → assistant can't read findings | Phase 4-2 just shipped (mobile fetcher). Phase 4-3 next: HTML→FHIR `presentedForm`. |
+| Observation | mixed | ✅ | ✅ | ~40,000 | ✅ Search, Profile vitals | ✅ | Strong. Quality patches in `DATA_QUALITY_CHECKLIST.md`. **Phase 4-3 added 3,555 structured component-result Observations from 479 Stanford labs** (`urn:stanford:myhealth:component-result`). |
+| DiagnosticReport (lab/imaging/path) | Stanford, MSKCC, LabCorp | ✅ 489 from Stanford as `urn:stanford:myhealth:order` | ✅ Stanford (479/489 = 98%) | 2,103 | ✅ Search | ✅ for the 479 Stanford labs (component-level Observations) | **Phase 4 complete for Stanford labs.** Two-step API (GetDetails + LoadReportContent) reverse-engineered via portal-scout; ~70s for the full batch. 10 outliers (imaging-only/comments-only/metadata-only) skipped. |
 | DocumentReference (clinical notes) | Stanford (via mobile), MSKCC, UCSF | ✅ | ✅ | 821 | ✅ inline on encounter | ✅ via `loadBinaryNoteInto` | Strong since Phase 2 (per-visit-note scrape). |
 | Communication (messages) | Stanford (mobile, 752), MSKCC (legacy, 376) | ✅ | ✅ | 1,128 | ✅ Messages tab | ⚠️ no direct assistant wiring yet | Phase 3 just shipped. Thread-key heuristic improvement queued (`task_e734b339`). |
 | MedicationRequest | mixed | ✅ | ✅ | 739 | ✅ Meds tab | ✅ | Strong. |
@@ -166,4 +166,5 @@ Bump the "Last counts taken" date when you update. If a count's status emoji cha
 
 ## Changelog
 
+- **2026-06-23** — v2. Phase 4 complete for Stanford labs: 3,555 structured component-result Observations added across 479 DRs. Discovered systemic pre-existing gap: 1,991/2,103 DRs lack `subject` reference (only 112 are patient-linked), and 7 Patient resources exist for one human — needs dedup + backfill.
 - **2026-06-17** — v1 created. Reflects Phase 3 (messages) shipped, Phase 4 (lab bodies) in flight. Supersedes the per-resource sections of `SCRAPER_AUDIT_2026-05.md`.
