@@ -7,8 +7,8 @@
 - Counts are point-in-time. Re-run the counts block (see Appendix) and bump "Last counts taken" whenever you update the matrix. Don't chase small drift.
 - Status changes get a one-line entry in the changelog at the bottom — keeps the history without bloating the matrix.
 
-**Last counts taken:** 2026-06-23 (HAPI on localhost:8090).
-**Coverage matrix version:** 2.
+**Last counts taken:** 2026-06-23 post-consolidation (HAPI on localhost:8090).
+**Coverage matrix version:** 3.
 
 ---
 
@@ -39,7 +39,7 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 
 | Resource type | Source | List | Body | HAPI | UI | AI | Notes / next |
 |---|---|---|---|---|---|---|---|
-| Patient | mixed | ✅ | n/a | **7** ⚠️ | ✅ Profile | ✅ | **Duplicate** — 7 Patient resources for one human; needs dedup. See `SCRAPER_AUDIT_2026-05` §5. |
+| Patient | mixed | ✅ | n/a | 16 ✅ | ✅ Profile | ✅ | **Reorganized 2026-06-23**: `Patient/bina-user-urisarid` is the canonical Bina anchor with `link[seealso]` to 15 sub-identity Patients (one per data source). Sub-identities: 4 institutional (stanford/ucsf/mayo/mskcc), 1 affiliate (sutter), 4 vendors (labcorp/doctorsdata/sibocenter/genova), 1 EHR-unknown (cerner), 3 Apple (wearable/health-records), 2 misc (historical-import/unknown-oid/untagged). |
 | Practitioner | — | ❌ | ❌ | 0 | ❌ | ❌ | Senders/recipients carried as `.display` only; no first-class Practitioner records. Low priority. |
 | Encounter (past visits) | Stanford, MSKCC, UCSF | ✅ | ✅ via mobile per-visit notes | 543 | ✅ Home / appointment details | ✅ | Stable. |
 | Appointment (future visits) | Stanford | 🟡 some in Home tab | n/a | **0** ❌ | ✅ rendered from `api/profile` | ⚠️ | Surfaced in UI but not stored as FHIR Appointment resources. Inconsistency worth fixing. |
@@ -166,5 +166,6 @@ Bump the "Last counts taken" date when you update. If a count's status emoji cha
 
 ## Changelog
 
+- **2026-06-23 (later)** — v3. Patient consolidation: canonical `Patient/bina-user-urisarid` + 15 sub-identity Patients (one per data source); 43,879 resources reassigned to point at the matching sub-identity. Subject coverage now 100% across all major resource types (was 5%). Known limitation: HAPI's `Patient/$everything` doesn't follow `Patient.link` by default — the live app uses per-type `subject=Patient/X` searches and doesn't hit this. See `tools/patient_consolidation/consolidate_patients.py`.
 - **2026-06-23** — v2. Phase 4 complete for Stanford labs: 3,555 structured component-result Observations added across 479 DRs. Discovered systemic pre-existing gap: 1,991/2,103 DRs lack `subject` reference (only 112 are patient-linked), and 7 Patient resources exist for one human — needs dedup + backfill.
 - **2026-06-17** — v1 created. Reflects Phase 3 (messages) shipped, Phase 4 (lab bodies) in flight. Supersedes the per-resource sections of `SCRAPER_AUDIT_2026-05.md`.
