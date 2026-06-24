@@ -433,25 +433,52 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _status = 'Scout: installing capture hook…';
     });
     try {
-      // 1. Start capture. The bootstrap is already installed in every frame
-      // via initialUserScripts (AT_DOCUMENT_START, forMainFrameOnly: false).
-      // start() resets the records store and broadcasts active=true to subframes.
+      // 1. Verify the bootstrap actually loaded. The scout fails fast and
+      // loud if it didn't — silently producing 0 sections is the worst
+      // possible failure mode for a recon tool. Falls back to an explicit
+      // injection if the UserScript path didn't fire (e.g. config drift).
+      final probeRaw = await _ctrl!.evaluateJavascript(source: '''
+        JSON.stringify({
+          bootstrap: !!window.__binaPortalScoutBootstrapped,
+          installed: !!(window.__portalScout && window.__portalScout.installed),
+          hasEnumerate: !!(window.__portalScout && typeof window.__portalScout.enumerateAllFrames === 'function'),
+          frames: window.frames.length,
+          url: location.href,
+        })
+      ''');
+      final probe = jsonDecode(probeRaw?.toString() ?? '{}');
+      await LocalWriter.appendScoutDiagLine(_batchStartedAt!,
+          {'phase': 'probe', ...Map<String, dynamic>.from(probe)});
+      if (probe['installed'] != true || probe['hasEnumerate'] != true) {
+        // Fallback: explicit injection of the bootstrap into the top frame.
+        // (Subframes still need the UserScript path; if it didn't fire,
+        // cross-frame enumeration will be limited.)
+        await LocalWriter.appendScoutDiagLine(_batchStartedAt!,
+            {'phase': 'bootstrap-fallback', 'reason': 'UserScript not detected'});
+        await _ctrl!.evaluateJavascript(source: ScrapeJobs.bootstrapForUserScript());
+      }
+
+      // Start capture. The bootstrap is installed in every frame via
+      // initialUserScripts; start() resets the records store and
+      // broadcasts active=true to subframes.
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.start();');
 
-      // 2. Let the SPA hydrate. Stanford's home is /signedin/home#/ — the
-      // nav inside the cross-origin iframe is React-rendered after
-      // onLoadStop fires, so a few seconds of patience massively improves
-      // what we see.
+      // 2. Let the SPA hydrate.
       setState(() => _status = 'Scout: waiting for SPA hydration (4s)…');
       await Future.delayed(const Duration(seconds: 4));
 
-      // 3. Enumerate clickable elements across ALL frames (top + every
-      // cross-origin iframe). enumerateAllFrames() broadcasts via
-      // postMessage and aggregates responses.
+      // 3. Enumerate clickable elements across ALL frames. Use
+      // callAsyncJavaScript so the Promise is properly awaited
+      // (evaluateJavascript returns the Promise stringified, not its value).
       setState(() => _status = 'Scout: enumerating sections (all frames)…');
-      final linksRaw = await _ctrl!.evaluateJavascript(
-        source: '(async () => JSON.stringify(await window.__portalScout.enumerateAllFrames(2500)))()',
-      );
+      final asyncResult = await _ctrl!.callAsyncJavaScript(functionBody: '''
+        if (!window.__portalScout || typeof window.__portalScout.enumerateAllFrames !== 'function') {
+          return JSON.stringify({ok:false, error:'portalScout not installed at enum time'});
+        }
+        const r = await window.__portalScout.enumerateAllFrames(2500);
+        return JSON.stringify(r);
+      ''');
+      final linksRaw = asyncResult?.value;
       final linksDecoded = jsonDecode(linksRaw?.toString() ?? '{}');
       final allLinks = ((linksDecoded['candidates'] ?? const []) as List).cast<dynamic>();
       final byKind   = Map<String, dynamic>.from(linksDecoded['byKind'] ?? {});
@@ -563,7 +590,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.2-2026-06-23',
+        'scoutVersion': 'v1.3-2026-06-23',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
