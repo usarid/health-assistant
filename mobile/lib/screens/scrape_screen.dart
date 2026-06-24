@@ -58,7 +58,13 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // Portal-scout state
   bool _autoScoutOnSignIn = true;   // single-user dev default; toggle in overflow menu
   bool _scoutRanThisSession = false; // guards against re-fire on session re-login
-  bool _wasSignedIn = false;         // previous _onSignedInPage value for edge detection
+  // Auto-fire stability gate: only run when we've been on /signedin/home for
+  // a sustained period. Stanford's auth flow does a brief touch-through
+  // /signedin/* between password submit and MFA — firing on that flicker
+  // interrupts MFA entry (proven 2026-06-24).
+  Timer? _scoutAutoFireTimer;
+  static const Duration _scoutAutoFireDelay = Duration(seconds: 8);
+  static const String _autoFireHomePathFragment = '/signedin/home';
   // CSN currently being scraped — surfaces in every noteDiag line so the
   // post-run JSONL ties emits back to a specific visit without anyone
   // needing to correlate timestamps.
@@ -74,6 +80,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // setState rebuilds that don't relate to it.
   String _diagLine = '';
 
+
+  @override
+  void dispose() {
+    _scoutAutoFireTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -211,28 +223,45 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
                 final onSignedIn = urlStr.contains(StanfordConfig.signedInMarker);
-                final isFirstSignIn = onSignedIn && !_wasSignedIn;
                 setState(() {
                   _currentUrl = urlStr;
                   _onSignedInPage = onSignedIn;
-                  _wasSignedIn = onSignedIn;
-                  if (onSignedIn && !_batchRunning && !_status.startsWith('Scrape') && !_status.startsWith('Scout')) {
-                    _status = 'Logged in. Choose Test or Scrape All.';
+                  if (onSignedIn && !_batchRunning && !_status.startsWith('Scrape') && !_status.startsWith('Scout') && !_status.startsWith('Auto-scout')) {
+                    _status = 'Logged in.';
                   }
                 });
                 // Resolve a pending navigation if this is the URL we asked for
                 if (_navCompleter != null && _navCompleter!.isCompleted == false) {
                   _navCompleter!.complete();
                 }
-                // Auto-scout fires once per session on the first unauth→auth
-                // transition. Gate also on the in-memory toggle and the
-                // "already ran this session" guard so a stale-session
-                // reauth doesn't re-fire.
-                if (isFirstSignIn && _autoScoutOnSignIn && !_scoutRanThisSession && !_batchRunning) {
-                  _scoutRanThisSession = true;
-                  // Let the home page settle before driving navigation.
-                  Future.delayed(const Duration(seconds: 2), () {
-                    if (mounted && _onSignedInPage && !_batchRunning) _runPortalScout();
+                // Auto-scout fires once per session, AFTER the URL has
+                // been stable on /signedin/home for _scoutAutoFireDelay
+                // seconds. We restart the countdown on every onLoadStop —
+                // any nav (MFA redirect, route bounce, manual nav) resets
+                // it, so the scout only fires when the user is genuinely
+                // parked on home. v1.4 (fire 2s after first /signedin/
+                // touch) interrupted MFA entry; this stability gate avoids
+                // that whole failure class.
+                _scoutAutoFireTimer?.cancel();
+                _scoutAutoFireTimer = null;
+                if (onSignedIn && _autoScoutOnSignIn && !_scoutRanThisSession
+                    && !_batchRunning && urlStr.contains(_autoFireHomePathFragment)) {
+                  final fireAt = DateTime.now().add(_scoutAutoFireDelay);
+                  setState(() => _status =
+                      'Auto-scout in ${_scoutAutoFireDelay.inSeconds}s '
+                      '(use menu to defer)');
+                  _scoutAutoFireTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+                    final remaining = fireAt.difference(DateTime.now()).inSeconds;
+                    if (remaining <= 0) {
+                      t.cancel(); _scoutAutoFireTimer = null;
+                      if (mounted && _onSignedInPage && !_batchRunning) {
+                        _scoutRanThisSession = true;
+                        _runPortalScout();
+                      }
+                    } else if (mounted && !_batchRunning) {
+                      setState(() => _status =
+                          'Auto-scout in ${remaining}s (use menu to defer)');
+                    }
                   });
                 }
                 // If this looks like a login page (not signed in yet), inject
@@ -608,7 +637,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.4-2026-06-23',
+        'scoutVersion': 'v1.5-2026-06-24',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
@@ -676,14 +705,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _fetchAllLabBodies();
     } else if (value == 'toggle-auto-scout') {
       setState(() => _autoScoutOnSignIn = !_autoScoutOnSignIn);
+      // Cancel any pending countdown if the user just disabled it.
+      if (!_autoScoutOnSignIn) {
+        _scoutAutoFireTimer?.cancel();
+        _scoutAutoFireTimer = null;
+        if (_status.startsWith('Auto-scout in ')) setState(() => _status = 'Auto-scout deferred.');
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(_autoScoutOnSignIn
-            ? 'Auto-scout enabled. Will run on next sign-in.'
-            : 'Auto-scout disabled. Use the menu item to run manually.'),
-        duration: const Duration(seconds: 3),
+            ? 'Auto-scout enabled. Will run on next sign-in after URL stabilizes on /signedin/home.'
+            : 'Auto-scout disabled. Use "Run portal scout now" when ready.'),
+        duration: const Duration(seconds: 4),
       ));
     } else if (value == 'run-portal-scout') {
+      _scoutAutoFireTimer?.cancel();
+      _scoutAutoFireTimer = null;
       _scoutRanThisSession = false; // allow manual re-trigger
       await _runPortalScout();
     } else if (value == 'retry-failures') {
