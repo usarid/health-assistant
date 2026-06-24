@@ -1624,12 +1624,325 @@ class ScrapeJobs {
   // path. Same architecture (page-context fetch/XHR/sessionStorage hooks
   // with cross-frame postMessage bridging), expressed as Dart-injected JS
   // instead of a userscript. Once installed, the page exposes
-  //   window.__portalScout.{start, stop, count, records, clear}
+  //   window.__portalScout.{start, stop, count, records, clear,
+  //                          enumerateAllFrames}
   // and Dart drives the autonomous portal walk via evaluateJavascript.
+  //
+  // The canonical entry point is [bootstrapForUserScript] — register it as
+  // an `initialUserScripts` UserScript with `forMainFrameOnly: false` and
+  // `injectionTime: AT_DOCUMENT_START` so the bootstrap runs in every
+  // frame (wrapper + cross-origin iframes) before page JS executes.
+  // [installApiCapture] is kept as a fallback for explicit re-injection.
   //
   // Captures live in the top frame's localStorage (key 'portalscout.records')
   // so they survive same-origin navigation between sections.
   // ──────────────────────────────────────────────────────────────────────
+
+  /// Self-contained bootstrap that runs in EVERY frame (top + cross-origin
+  /// iframes) at document-start. Installs:
+  ///   - fetch / XHR / Storage.setItem hooks (per-frame)
+  ///   - postMessage-RPC enumeration handler (every frame answers requests)
+  ///   - on the top frame only: the [window.__portalScout] surface, including
+  ///     `enumerateAllFrames()` which broadcasts to all descendants and
+  ///     aggregates responses.
+  static String bootstrapForUserScript() => r'''
+(() => {
+  if (window.__binaPortalScoutBootstrapped) return;
+  window.__binaPortalScoutBootstrapped = true;
+
+  const LS_STATE   = 'portalscout.active';
+  const LS_RECORDS = 'portalscout.records';
+  const MSG_TAG    = '__portalScout__';
+  const inTop      = (window.top === window);
+
+  // ── Helpers ─────────────────────────────────────────────────────────
+  const now      = () => new Date().toISOString();
+  const isAsset  = (url) => /\.(css|js|png|jpg|jpeg|svg|gif|woff2?|ttf|ico|map)(\?|$)/i.test(url || '');
+  const stringifyBody = (b) => {
+    if (b == null) return null;
+    if (typeof b === 'string') return b;
+    if (b instanceof URLSearchParams) return b.toString();
+    if (b instanceof FormData) {
+      const o = {}; for (const [k, v] of b.entries()) o[k] = (typeof v === 'string') ? v : '[Blob]';
+      return JSON.stringify(o);
+    }
+    if (b instanceof ArrayBuffer || ArrayBuffer.isView(b)) return '[binary ' + b.byteLength + 'b]';
+    try { return JSON.stringify(b); } catch (e) { return '[unserializable]'; }
+  };
+  const headersToObject = (h) => {
+    if (!h) return null;
+    if (h instanceof Headers) { const o = {}; for (const [k, v] of h.entries()) o[k] = v; return o; }
+    if (Array.isArray(h)) return Object.fromEntries(h);
+    if (typeof h === 'object') return { ...h };
+    return null;
+  };
+  const parseRespHeaders = (s) => {
+    const o = {};
+    (s || '').split('\r\n').forEach(line => {
+      const i = line.indexOf(':');
+      if (i > 0) o[line.slice(0, i).trim().toLowerCase()] = line.slice(i + 1).trim();
+    });
+    return o;
+  };
+
+  // ── Capture state & store ──────────────────────────────────────────
+  function appendLocal(rec) {
+    try {
+      const arr = JSON.parse(localStorage.getItem(LS_RECORDS) || '[]');
+      arr.push(rec);
+      localStorage.setItem(LS_RECORDS, JSON.stringify(arr));
+    } catch (e) {}
+  }
+  const push = inTop
+    ? appendLocal
+    : (rec) => { try { window.top.postMessage({tag: MSG_TAG, type: 'rec', rec}, '*'); } catch (e) {} };
+
+  let subActive = true; // fail-open in subframes (top still gates on receive)
+  const active = inTop
+    ? () => localStorage.getItem(LS_STATE) === '1'
+    : () => subActive;
+
+  // ── Top-frame: receive child records + state-requests; broadcast state ─
+  function broadcastState(isActive) {
+    try {
+      for (let i = 0; i < window.frames.length; i++) {
+        try { window.frames[i].postMessage({tag: MSG_TAG, type: 'state', active: isActive}, '*'); } catch (e) {}
+      }
+    } catch (e) {}
+  }
+
+  // ── Enumeration logic (runs locally in every frame) ────────────────
+  function classify(path, text) {
+    const t = ((text || '') + ' ' + (path || '')).toLowerCase();
+    if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert)\b/.test(t)) return 'skip';
+    if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
+    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research|inbox|outbox|letter|chart|profile-?summary)\b/.test(t)) return 'clinical';
+    if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
+    return 'other';
+  }
+  function visibleText(el) {
+    return (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '')
+      .trim().replace(/\s+/g, ' ').slice(0, 80);
+  }
+  function destinationHint(el) {
+    for (const attr of ['href', 'data-href', 'data-route', 'data-link', 'data-url']) {
+      const v = el.getAttribute && el.getAttribute(attr);
+      if (v) return {url: v, src: attr};
+    }
+    const onclickAttr = el.getAttribute && el.getAttribute('onclick');
+    if (onclickAttr) {
+      const m = onclickAttr.match(/['"](\/[^'"\s]+|#\/?[^'"\s]+|https?:\/\/[^'"\s]+)['"]/);
+      if (m) return {url: m[1], src: 'onclick-attr'};
+    }
+    const onclickFn = el.onclick;
+    if (typeof onclickFn === 'function') {
+      const src = onclickFn.toString();
+      const m = src.match(/['"](\/[^'"\s]+|#\/?[^'"\s]+|https?:\/\/[^'"\s]+)['"]/);
+      if (m) return {url: m[1], src: 'onclick-fn'};
+    }
+    for (const attr of ['routerLink', 'ng-href', 'ng-click', 'to']) {
+      const v = el.getAttribute && el.getAttribute(attr);
+      if (v) return {url: v, src: attr};
+    }
+    return null;
+  }
+  function makeAbsolute(url) {
+    try { return new URL(url, location.href).href; } catch (e) { return null; }
+  }
+  function enumerateLocal() {
+    const seen = new Set();
+    const out  = [];
+    const byKind = {};
+    const selectors = [
+      {sel: 'a[href]',                kind: 'a'},
+      {sel: 'button',                  kind: 'button'},
+      {sel: '[role="link"]',           kind: 'role-link'},
+      {sel: '[role="menuitem"]',       kind: 'role-menuitem'},
+      {sel: '[role="tab"]',            kind: 'role-tab'},
+      {sel: '[role="button"]',         kind: 'role-button'},
+      {sel: '[data-href]',             kind: 'data-href'},
+      {sel: '[data-route]',            kind: 'data-route'},
+      {sel: '[ng-click]',              kind: 'ng-click'},
+      {sel: '[routerlink], [routerLink]', kind: 'router-link'},
+    ];
+    for (const {sel, kind} of selectors) {
+      for (const el of document.querySelectorAll(sel)) {
+        const hint = destinationHint(el);
+        const text = visibleText(el);
+        const href = hint && hint.url ? makeAbsolute(hint.url) : null;
+        if (href && !href.startsWith(location.origin) && !href.startsWith('#')) continue;
+        const dedupKey = href || (kind + '|' + text);
+        if (seen.has(dedupKey)) continue;
+        if (!hint && !text) continue;
+        seen.add(dedupKey);
+        const path = href ? ((new URL(href)).pathname + (new URL(href)).hash) : '';
+        const cls  = classify(path, text);
+        out.push({
+          href, text, path,
+          classification: cls,
+          elementKind: kind,
+          hintSource: hint ? hint.src : null,
+          frameUrl: location.href,
+        });
+        byKind[kind] = (byKind[kind] || 0) + 1;
+      }
+    }
+    return {byKind, candidates: out};
+  }
+
+  // ── postMessage RPC across frames ──────────────────────────────────
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || d.tag !== MSG_TAG) return;
+    // Capture-record forwarding (subframes → top)
+    if (d.type === 'rec' && d.rec && inTop && active()) appendLocal(d.rec);
+    // Subframe state propagation
+    if (d.type === 'state' && !inTop) subActive = !!d.active;
+    // Subframe replies to top's enumeration request — handled below in the
+    // enumerateAllFrames wait loop via dedicated listener on each call.
+    if (d.type === 'state-request' && inTop) {
+      try { e.source && e.source.postMessage({tag: MSG_TAG, type: 'state', active: active()}, '*'); } catch (er) {}
+    }
+    // Any frame answers enumeration requests with its local catalogue.
+    if (d.type === 'scout-enum-request') {
+      const result = enumerateLocal();
+      try {
+        e.source && e.source.postMessage({
+          tag: MSG_TAG, type: 'scout-enum-response',
+          reqId: d.reqId,
+          frameUrl: location.href,
+          byKind: result.byKind,
+          candidates: result.candidates,
+        }, '*');
+      } catch (er) {}
+    }
+  });
+
+  // Subframe — ask top for current capture state on install.
+  if (!inTop) {
+    try { window.top.postMessage({tag: MSG_TAG, type: 'state-request'}, '*'); } catch (e) {}
+  }
+
+  // ── Hook fetch ────────────────────────────────────────────────────
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async function (input, init) {
+    const url    = (typeof input === 'string') ? input : (input && input.url) || String(input);
+    const method = (init && init.method) || (typeof input === 'object' && input.method) || 'GET';
+    const reqBody    = (init && init.body) || null;
+    const reqHeaders = headersToObject(init && init.headers) || {};
+    const t0 = performance.now();
+    const resp = await origFetch(input, init);
+    const dt = performance.now() - t0;
+    if (active() && !isAsset(url)) {
+      const clone = resp.clone();
+      let respBody = '';
+      try { respBody = await clone.text(); } catch (e) { respBody = '[read err]'; }
+      push({when: now(), kind: 'fetch', page: location.href, url, method,
+            reqHeaders, reqBody: stringifyBody(reqBody),
+            status: resp.status, respHeaders: headersToObject(resp.headers),
+            respContentType: resp.headers.get('content-type') || '',
+            respBody, durationMs: Math.round(dt)});
+    }
+    return resp;
+  };
+
+  // ── Hook XHR ───────────────────────────────────────────────────────
+  const OrigXHR = window.XMLHttpRequest;
+  function CapturedXHR() {
+    const xhr = new OrigXHR();
+    const meta = {reqHeaders: {}, reqBody: null, method: 'GET', url: '', t0: 0};
+    const origOpen = xhr.open;
+    xhr.open = function (m, u) { meta.method = m; meta.url = u; return origOpen.apply(xhr, arguments); };
+    const origSet  = xhr.setRequestHeader;
+    xhr.setRequestHeader = function (k, v) { meta.reqHeaders[k] = v; return origSet.apply(xhr, arguments); };
+    const origSend = xhr.send;
+    xhr.send = function (body) {
+      meta.reqBody = body; meta.t0 = performance.now();
+      if (active() && !isAsset(meta.url)) {
+        xhr.addEventListener('loadend', () => {
+          const rh = parseRespHeaders(xhr.getAllResponseHeaders());
+          push({when: now(), kind: 'xhr', page: location.href, url: meta.url,
+                method: meta.method, reqHeaders: meta.reqHeaders, reqBody: stringifyBody(meta.reqBody),
+                status: xhr.status, respHeaders: rh,
+                respContentType: rh['content-type'] || '',
+                respBody: xhr.responseText, durationMs: Math.round(performance.now() - meta.t0)});
+        });
+      }
+      return origSend.apply(xhr, arguments);
+    };
+    return xhr;
+  }
+  CapturedXHR.prototype = OrigXHR.prototype;
+  Object.setPrototypeOf(CapturedXHR, OrigXHR);
+  window.XMLHttpRequest = CapturedXHR;
+
+  // ── Hook Storage.setItem ──────────────────────────────────────────
+  const origSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function (k, v) {
+    if (active() && k !== LS_RECORDS && k !== LS_STATE) {
+      const area = (this === sessionStorage ? 'session' : (this === localStorage ? 'local' : 'other'));
+      push({when: now(), kind: 'storage', area, op: 'setItem', page: location.href,
+            key: k, valueLen: (v || '').length, valuePreview: String(v).slice(0, 200)});
+    }
+    return origSetItem.apply(this, arguments);
+  };
+
+  // ── Top-frame: expose programmatic surface ─────────────────────────
+  if (!inTop) {
+    window.__portalScout = {installed: true, _subframe: true, _bootstrap: true};
+    return;
+  }
+  window.__portalScout = {
+    installed: true,
+    _bootstrap: true,
+    start: () => { localStorage.setItem(LS_RECORDS, '[]'); localStorage.setItem(LS_STATE, '1'); broadcastState(true);  return 'started'; },
+    stop:  () => { localStorage.setItem(LS_STATE, '0'); broadcastState(false); return JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length; },
+    count: () => JSON.parse(localStorage.getItem(LS_RECORDS) || '[]').length,
+    records: () => JSON.parse(localStorage.getItem(LS_RECORDS) || '[]'),
+    clear: () => { localStorage.setItem(LS_RECORDS, '[]'); return 'cleared'; },
+    isActive: () => localStorage.getItem(LS_STATE) === '1',
+    // Broadcast enumeration request to every descendant frame; aggregate the
+    // responses that arrive within timeoutMs. Returns a JSON-serializable
+    // {ok, frames, totalCandidates, byFrame, byKind, candidates} object.
+    enumerateAllFrames: async (timeoutMs) => {
+      timeoutMs = (typeof timeoutMs === 'number') ? timeoutMs : 1500;
+      const reqId = 'enum-' + Math.random().toString(36).slice(2);
+      const responses = [];
+      function onMsg(e) {
+        const d = e.data;
+        if (!d || d.tag !== MSG_TAG || d.type !== 'scout-enum-response' || d.reqId !== reqId) return;
+        responses.push(d);
+      }
+      window.addEventListener('message', onMsg);
+      function broadcast(w) {
+        try { w.postMessage({tag: MSG_TAG, type: 'scout-enum-request', reqId}, '*'); } catch (e) {}
+        let n = 0; try { n = w.frames.length; } catch (e) {}
+        for (let i = 0; i < n; i++) {
+          try { broadcast(w.frames[i]); } catch (e) {}
+        }
+      }
+      broadcast(window);
+      await new Promise(r => setTimeout(r, timeoutMs));
+      window.removeEventListener('message', onMsg);
+      const byFrame = {};
+      const byKind  = {};
+      const all     = [];
+      const seen    = new Set();
+      for (const r of responses) {
+        byFrame[r.frameUrl] = (r.candidates || []).length;
+        for (const k in (r.byKind || {})) byKind[k] = (byKind[k] || 0) + r.byKind[k];
+        for (const c of (r.candidates || [])) {
+          const key = c.href || (c.elementKind + '|' + c.text);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          all.push(c);
+        }
+      }
+      return {ok: true, frames: responses.length, totalCandidates: all.length, byFrame, byKind, candidates: all};
+    },
+  };
+})();
+''';
 
   /// Page-context capture hook — fetch, XHR, sessionStorage writes; subframes
   /// forward records to top via postMessage. Re-injection on the same page

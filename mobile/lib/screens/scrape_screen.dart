@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection' show UnmodifiableListView;
 import 'dart:convert';
 import 'dart:math' show Random;
 import 'package:flutter/material.dart';
@@ -163,6 +164,19 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 javaScriptEnabled: true,
                 userAgent: StanfordConfig.mobileUserAgent,
               ),
+              // Portal scout bootstrap — runs at document-start in every
+              // frame (top wrapper + cross-origin iframes alike) so the
+              // api-capture hooks and the enumeration RPC handler are wired
+              // before any page script can fire. Without forMainFrameOnly:
+              // false the cross-origin iframe content (mychart.shc Epic
+              // page) is invisible to the scout — exactly what tripped v1.1.
+              initialUserScripts: UnmodifiableListView<UserScript>([
+                UserScript(
+                  source: ScrapeJobs.bootstrapForUserScript(),
+                  injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                  forMainFrameOnly: false,
+                ),
+              ]),
               onWebViewCreated: (c) {
                 _ctrl = c;
                 c.addJavaScriptHandler(
@@ -419,37 +433,46 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _status = 'Scout: installing capture hook…';
     });
     try {
-      // 1. Install + start capture in the top frame (re-injection is a no-op).
-      await _ctrl!.evaluateJavascript(source: ScrapeJobs.installApiCapture());
+      // 1. Start capture. The bootstrap is already installed in every frame
+      // via initialUserScripts (AT_DOCUMENT_START, forMainFrameOnly: false).
+      // start() resets the records store and broadcasts active=true to subframes.
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.start();');
 
       // 2. Let the SPA hydrate. Stanford's home is /signedin/home#/ — the
-      // nav is React-rendered after onLoadStop fires, so a few seconds of
-      // patience massively improves what we see.
+      // nav inside the cross-origin iframe is React-rendered after
+      // onLoadStop fires, so a few seconds of patience massively improves
+      // what we see.
       setState(() => _status = 'Scout: waiting for SPA hydration (4s)…');
       await Future.delayed(const Duration(seconds: 4));
 
-      // 3. Enumerate clickable elements (widened — covers SPAs that don't
-      // use real <a href>). Keep clinical-classified ones.
-      setState(() => _status = 'Scout: enumerating sections from home…');
-      final linksRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutEnumerateLinks());
+      // 3. Enumerate clickable elements across ALL frames (top + every
+      // cross-origin iframe). enumerateAllFrames() broadcasts via
+      // postMessage and aggregates responses.
+      setState(() => _status = 'Scout: enumerating sections (all frames)…');
+      final linksRaw = await _ctrl!.evaluateJavascript(
+        source: '(async () => JSON.stringify(await window.__portalScout.enumerateAllFrames(2500)))()',
+      );
       final linksDecoded = jsonDecode(linksRaw?.toString() ?? '{}');
-      final allLinks = ((linksDecoded['links'] ?? const []) as List).cast<dynamic>();
-      final byKind = Map<String, dynamic>.from(linksDecoded['byKind'] ?? {});
+      final allLinks = ((linksDecoded['candidates'] ?? const []) as List).cast<dynamic>();
+      final byKind   = Map<String, dynamic>.from(linksDecoded['byKind'] ?? {});
+      final byFrame  = Map<String, dynamic>.from(linksDecoded['byFrame'] ?? {});
+      final frames   = linksDecoded['frames'] ?? 0;
       final clinical = allLinks
           .where((l) => l is Map && l['classification'] == 'clinical')
           .map<Map<String, dynamic>>((l) => Map<String, dynamic>.from(l as Map))
           .toList();
       setState(() {
         _batchTotal = clinical.length;
-        _status = 'Scout: ${clinical.length} clinical sections to visit '
-            '(of ${allLinks.length} candidates)';
+        _status = 'Scout: ${clinical.length} clinical sections in $frames frames '
+            '(${allLinks.length} candidates total)';
       });
       await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
         'phase': 'enumerated',
+        'framesResponded': frames,
         'totalCandidates': allLinks.length,
         'clinicalLinks': clinical.length,
         'byElementKind': byKind,
+        'byFrame': byFrame,
         'home': _currentUrl,
       });
 
@@ -508,9 +531,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         // Let in-flight XHRs settle. 3s catches most Epic dashboards.
         await Future.delayed(const Duration(seconds: 3));
 
-        // Re-inject capture hook (new document) — keep existing localStorage
-        // state so accumulating records persists across navigation.
-        await _ctrl!.evaluateJavascript(source: ScrapeJobs.installApiCapture());
+        // Bootstrap re-runs automatically on the new document via the
+        // initialUserScripts hook; no explicit re-injection needed.
 
         // Snapshot + drain.
         final snapRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutSnapshotCurrent());
@@ -541,7 +563,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.1-2026-06-23',
+        'scoutVersion': 'v1.2-2026-06-23',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
