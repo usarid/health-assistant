@@ -25,6 +25,13 @@ class StanfordConfig {
   /// Login landing page; opens here on app launch.
   static const String loginUrl = '$wrapperOrigin/#/';
 
+  /// Canonical signed-in landing the portal-scout navigates to before
+  /// enumerating. Stanford's SPA route-bounces back to '/#/' (sign-in
+  /// shell) briefly during the post-MFA auth handshake without firing
+  /// onLoadStop, so relying on Dart's last-known URL is unreliable —
+  /// we navigate explicitly to a known signed-in page first.
+  static const String signedInHomeUrl = '$wrapperOrigin/signedin/home';
+
   /// Marker the WebView's URL transitions through once auth is established.
   /// We watch for it to enable the "Scrape all" action.
   static const String signedInMarker = '/signedin/';

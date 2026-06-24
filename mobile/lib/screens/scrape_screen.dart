@@ -433,17 +433,35 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _status = 'Scout: installing capture hook…';
     });
     try {
-      // 1. Verify the bootstrap actually loaded. The scout fails fast and
-      // loud if it didn't — silently producing 0 sections is the worst
-      // possible failure mode for a recon tool. Falls back to an explicit
-      // injection if the UserScript path didn't fire (e.g. config drift).
-      final probeRaw = await _ctrl!.evaluateJavascript(source: '''
+      // 0. Stanford's SPA bounces the WebView back to /#/ briefly during
+      // the post-MFA auth handshake without firing onLoadStop — Dart's
+      // last-known URL says /signedin/home#/, but JS sees /#/ at probe
+      // time. Diagnosed via v1.3 probe phase. Workaround: navigate
+      // explicitly to a known signed-in URL so probe+enumeration see
+      // the real signed-in DOM, not the sign-in chrome.
+      setState(() => _status = 'Scout: navigating to canonical signed-in home…');
+      _navCompleter = Completer<void>();
+      await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(StanfordConfig.signedInHomeUrl)));
+      try {
+        await _navCompleter!.future.timeout(const Duration(seconds: 12));
+      } on TimeoutException {
+        // Continue anyway — some SPA route changes don't fire onLoadStop;
+        // the probe below will tell us where we actually landed.
+      }
+
+      // 1. Verify the bootstrap loaded and we're on the right page. The
+      // probe writes the URL + pageHeading + a body-text snippet to the
+      // diag log so we can debug without re-running.
+      final probeRaw = await _ctrl!.evaluateJavascript(source: r'''
         JSON.stringify({
           bootstrap: !!window.__binaPortalScoutBootstrapped,
           installed: !!(window.__portalScout && window.__portalScout.installed),
           hasEnumerate: !!(window.__portalScout && typeof window.__portalScout.enumerateAllFrames === 'function'),
           frames: window.frames.length,
           url: location.href,
+          pageTitle: document.title,
+          pageHeading: (document.querySelector('h1, h2') && document.querySelector('h1, h2').innerText || '').trim().slice(0, 80),
+          bodyTextHead: (document.body && document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 300),
         })
       ''');
       final probe = jsonDecode(probeRaw?.toString() ?? '{}');
@@ -590,7 +608,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.3-2026-06-23',
+        'scoutVersion': 'v1.4-2026-06-23',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
