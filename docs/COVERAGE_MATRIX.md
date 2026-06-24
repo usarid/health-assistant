@@ -52,8 +52,8 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 | MedicationRequest | mixed | ✅ | ✅ | 739 | ✅ Meds tab | ✅ | Strong. |
 | MedicationStatement | — | ❌ | ❌ | **1** ❌ | ❌ | ❌ | Effectively empty. Patient-reported meds + adherence data not captured. |
 | Medication | — | ❌ | ❌ | 0 | ❌ | ❌ | Inline-referenced via MedicationRequest only. |
-| AllergyIntolerance | mixed | ⚠️ | ⚠️ | **3** ❌ | ✅ Profile (sparse) | 🟡 | Way under-covered. Most portals list allergies prominently — scraper gap. |
-| Immunization | mixed | 🟡 | 🟡 | **13** ❌ | ✅ Profile | 🟡 | Sparse. Apple Health Records carries more than we've ingested. |
+| AllergyIntolerance | historical-import + apple-health-records | ⚠️ | ⚠️ | **3** ❌ | ✅ Profile (sparse) | 🟡 | 2/3 from `bina-historical-import` (the early consolidated dump), 1/3 from `bina-apple-health-records`. **Per-portal scrapers surface zero** — they don't enumerate allergies yet. If we lost the historical bucket we'd lose most of what we have. |
+| Immunization | historical-import only | 🟡 | 🟡 | **13** ❌ | ✅ Profile | 🟡 | **All 13 come from `bina-historical-import`** (early consolidated dump, dated 2007–2023, mostly COVID series). Per-portal scrapers surface zero immunizations. Single-source-of-truth — losing the historical bucket = losing all immunization history. |
 | CarePlan | — | ❌ | ❌ | **1** ❌ | ❌ | ❌ | Empty. |
 | CareTeam | — | ❌ | ❌ | **0** ❌ | ❌ | ❌ | Empty. Stanford UI shows care team prominently — scraper gap. Useful for "who do I message about X." |
 | Goal | — | ❌ | ❌ | 0 | ❌ | ❌ | Empty. |
@@ -123,10 +123,11 @@ Ordered by clinical value × scraping feasibility.
 
 **Tier C — clinical-but-niche, or out of patient-portal scope:**
 8. **MedicationStatement** (adherence) — patient-reported, not always in portals
-9. **Immunization** — Apple Health Records carries some; portal scrape would catch the rest
-10. **Questionnaire/QuestionnaireResponse** — pre-appointment intake forms
-11. **ServiceRequest** — pending orders / referrals
-12. **CarePlan / Goal** — chronic-disease management; rare in our portals
+9. **Immunization** — all 13 currently in HAPI come from `bina-historical-import` (a one-time consolidated dump). Per-portal scrapers don't surface immunizations at all yet. Mayo native scrape would re-cover most; UCSF/MSKCC/Stanford each carry their own slice.
+10. **Mayo native scrape** — the `bina-historical-import` bucket is the *only* path through which Mayo MM-monitoring labs (Free Kappa/Lambda Light Chain, Kappa/Lambda Ratio — 68 of the 70 historical Observations) reach HAPI. No Mayo mobile scrape exists; Apple Health Records only carries a small slice. Single point of failure for the user's primary disease-monitoring data.
+11. **Questionnaire/QuestionnaireResponse** — pre-appointment intake forms
+12. **ServiceRequest** — pending orders / referrals
+13. **CarePlan / Goal** — chronic-disease management; rare in our portals
 
 **Tier D — explicitly out of scope today:**
 - Imaging pixel data (PACS access not available via patient portals)
