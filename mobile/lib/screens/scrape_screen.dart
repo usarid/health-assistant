@@ -520,21 +520,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _status = 'Scout: installing capture hook…';
     });
     try {
-      // 0. Stanford's SPA bounces the WebView back to /#/ briefly during
-      // the post-MFA auth handshake without firing onLoadStop — Dart's
-      // last-known URL says /signedin/home#/, but JS sees /#/ at probe
-      // time. Diagnosed via v1.3 probe phase. Workaround: navigate
-      // explicitly to a known signed-in URL so probe+enumeration see
-      // the real signed-in DOM, not the sign-in chrome.
-      setState(() => _status = 'Scout: navigating to canonical signed-in home…');
-      _navCompleter = Completer<void>();
-      await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(StanfordConfig.signedInHomeUrl)));
-      try {
-        await _navCompleter!.future.timeout(const Duration(seconds: 12));
-      } on TimeoutException {
-        // Continue anyway — some SPA route changes don't fire onLoadStop;
-        // the probe below will tell us where we actually landed.
-      }
+      // No explicit nav at scout start — verifyAndFireScout's DOM probe
+      // already confirmed the current page is signed-in. Adding a hard
+      // navigation here knocked Stanford's session out (diag 2026-06-25:
+      // probe saw /signedin/home, 4s later enumerate saw /#/ — Stanford
+      // bounces hard-navigations back to login). Just enumerate the page
+      // the user already landed on.
 
       // 1. Verify the bootstrap loaded and we're on the right page. The
       // probe writes the URL + pageHeading + a body-text snippet to the
@@ -649,15 +640,19 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           _status = 'Scout ${i + 1}/${visitable.length}: $label';
         });
 
-        // Navigate. _navCompleter resolves in onLoadStop when the URL changes.
+        // Soft nav via JS location.href — Stanford's SPA invalidates the
+        // session when we use loadUrl() (proven 2026-06-25 diag), but
+        // setting window.location preserves the auth state because the
+        // SPA's interceptors get a chance to handle the transition.
         _navCompleter = Completer<void>();
-        await _ctrl!.loadUrl(urlRequest: URLRequest(url: WebUri(href)));
+        final hrefJs = href.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
+        await _ctrl!.evaluateJavascript(source: "window.location.href = '$hrefJs';");
         try {
           await _navCompleter!.future.timeout(const Duration(seconds: 12));
         } on TimeoutException {
-          // Continue anyway — some pages don't fire onLoadStop cleanly
-          // (SPA route transitions). The snapshot+capture below will
-          // still grab whatever's there.
+          // Continue anyway — SPA route transitions (hash-only changes)
+          // don't always fire onLoadStop. The snapshot below confirms
+          // where we actually landed.
         }
 
         // Let in-flight XHRs settle. 3s catches most Epic dashboards.
@@ -695,7 +690,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.7-2026-06-24',
+        'scoutVersion': 'v1.8-2026-06-24',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
