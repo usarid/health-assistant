@@ -58,13 +58,15 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // Portal-scout state
   bool _autoScoutOnSignIn = true;   // single-user dev default; toggle in overflow menu
   bool _scoutRanThisSession = false; // guards against re-fire on session re-login
-  // Auto-fire stability gate: only run when we've been on /signedin/home for
-  // a sustained period. Stanford's auth flow does a brief touch-through
-  // /signedin/* between password submit and MFA — firing on that flicker
-  // interrupts MFA entry (proven 2026-06-24).
+  // Auto-fire is gated on a per-tick DOM probe (signed-in indicators
+  // present; no password input visible). The 8s countdown gives the
+  // user buffer to interrupt; after every defer we re-poll every 10s
+  // so a slow MFA completion doesn't strand the user with "nothing
+  // happening" when they DO finish signing in.
   Timer? _scoutAutoFireTimer;
-  static const Duration _scoutAutoFireDelay = Duration(seconds: 8);
-  static const String _autoFireHomePathFragment = '/signedin/home';
+  Timer? _scoutAutoRepollTimer;
+  static const Duration _scoutAutoFireDelay  = Duration(seconds: 8);
+  static const Duration _scoutAutoRepollWait = Duration(seconds: 10);
   // CSN currently being scraped — surfaces in every noteDiag line so the
   // post-run JSONL ties emits back to a specific visit without anyone
   // needing to correlate timestamps.
@@ -84,6 +86,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   @override
   void dispose() {
     _scoutAutoFireTimer?.cancel();
+    _scoutAutoRepollTimer?.cancel();
     super.dispose();
   }
 
@@ -242,33 +245,15 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 // parked on home. v1.4 (fire 2s after first /signedin/
                 // touch) interrupted MFA entry; this stability gate avoids
                 // that whole failure class.
-                _scoutAutoFireTimer?.cancel();
-                _scoutAutoFireTimer = null;
-                if (onSignedIn && _autoScoutOnSignIn && !_scoutRanThisSession
-                    && !_batchRunning && urlStr.contains(_autoFireHomePathFragment)) {
-                  final fireAt = DateTime.now().add(_scoutAutoFireDelay);
-                  setState(() => _status =
-                      'Auto-scout in ${_scoutAutoFireDelay.inSeconds}s '
-                      '(use menu to defer)');
-                  _scoutAutoFireTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-                    final remaining = fireAt.difference(DateTime.now()).inSeconds;
-                    if (remaining <= 0) {
-                      t.cancel(); _scoutAutoFireTimer = null;
-                      if (!mounted || _batchRunning || _ctrl == null) return;
-                      // PRE-FIRE VERIFICATION — onLoadStop URLs lag behind
-                      // SPA route changes, so the URL we *think* we're on may
-                      // not be the URL we're actually on. Probe the live page
-                      // for signed-in indicators (no password input visible
-                      // + a Logout affordance present) before letting the
-                      // scout interrupt anything. If it doesn't look signed
-                      // in, defer silently — the next onLoadStop will rearm
-                      // the timer if the user does complete sign-in.
-                      _verifyAndFireScout();
-                    } else if (mounted && !_batchRunning) {
-                      setState(() => _status =
-                          'Auto-scout in ${remaining}s (use menu to defer)');
-                    }
-                  });
+                // Cancel any running timers — onLoadStop is the canonical
+                // "things might have changed" signal. We re-arm below if
+                // auto-scout is enabled and we look like we're on a
+                // signed-in URL. The DOM probe at fire time decides
+                // whether the page is REALLY signed in.
+                _scoutAutoFireTimer?.cancel();      _scoutAutoFireTimer = null;
+                _scoutAutoRepollTimer?.cancel();    _scoutAutoRepollTimer = null;
+                if (onSignedIn && _autoScoutOnSignIn && !_scoutRanThisSession && !_batchRunning) {
+                  _armScoutAutoFireCountdown();
                 }
                 // If this looks like a login page (not signed in yet), inject
                 // the autofill + capture hook with any stored credentials.
@@ -447,12 +432,31 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     return {'ok': true};
   }
 
-  /// Verify that the live page is actually a signed-in session BEFORE
-  /// kicking off the scout. The scout navigates to /signedin/home — which
-  /// is disruptive if the user is mid-MFA or on the sign-in form. Run a
-  /// quick JS check first; if it doesn't look signed in, abort silently
-  /// (the next onLoadStop will rearm the countdown if real sign-in
-  /// happens later).
+  /// Start the visible countdown that ends in a verify-then-fire call.
+  /// Cancellable via onLoadStop (rearm) or the menu toggle (disable).
+  void _armScoutAutoFireCountdown() {
+    _scoutAutoFireTimer?.cancel();
+    final fireAt = DateTime.now().add(_scoutAutoFireDelay);
+    setState(() => _status =
+        'Auto-scout in ${_scoutAutoFireDelay.inSeconds}s (use menu to defer)');
+    _scoutAutoFireTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      final remaining = fireAt.difference(DateTime.now()).inSeconds;
+      if (remaining <= 0) {
+        t.cancel();
+        _scoutAutoFireTimer = null;
+        if (!mounted || _batchRunning || _ctrl == null) return;
+        _verifyAndFireScout();
+      } else if (mounted && !_batchRunning) {
+        setState(() =>
+            _status = 'Auto-scout in ${remaining}s (use menu to defer)');
+      }
+    });
+  }
+
+  /// Verify the live page DOM is signed-in BEFORE kicking off the scout.
+  /// If not (still sees password input or no Logout link), defer + schedule
+  /// a re-probe in _scoutAutoRepollWait so a slow MFA completion eventually
+  /// triggers the scout without needing another onLoadStop.
   Future<void> _verifyAndFireScout() async {
     if (_ctrl == null) return;
     try {
@@ -467,17 +471,29 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         })
       ''');
       final probe = jsonDecode(probeRaw?.toString() ?? '{}');
-      final hasPw = probe['hasPasswordInput'] == true;
+      final hasPw     = probe['hasPasswordInput'] == true;
       final hasLogout = probe['hasLogout'] == true;
-      final liveUrl = (probe['url'] ?? '').toString();
-      final onHome = liveUrl.contains(_autoFireHomePathFragment);
-      if (!onHome || hasPw || !hasLogout) {
-        setState(() => _status = 'Auto-scout deferred — sign-in not confirmed '
-            '(pw=$hasPw, logout=$hasLogout, url=${Uri.tryParse(liveUrl)?.path ?? liveUrl})');
+      final liveUrl   = (probe['url'] ?? '').toString();
+      final onSigned  = liveUrl.contains(StanfordConfig.signedInMarker);
+      if (onSigned && !hasPw && hasLogout) {
+        _scoutAutoRepollTimer?.cancel();
+        _scoutAutoRepollTimer = null;
+        _scoutRanThisSession = true;
+        await _runPortalScout();
         return;
       }
-      _scoutRanThisSession = true;
-      await _runPortalScout();
+      final pathOnly = Uri.tryParse(liveUrl)?.path ?? liveUrl;
+      setState(() => _status = 'Auto-scout deferred (pw=$hasPw logout=$hasLogout '
+          'url=$pathOnly) — will re-check in ${_scoutAutoRepollWait.inSeconds}s');
+      // Re-poll loop: keep checking the page state at a slower cadence
+      // until the user is genuinely signed in. Cancelled by next
+      // onLoadStop (which will rearm via the full countdown), by the
+      // menu toggle, or by dispose().
+      _scoutAutoRepollTimer?.cancel();
+      _scoutAutoRepollTimer = Timer(_scoutAutoRepollWait, () {
+        if (!mounted || _batchRunning || !_autoScoutOnSignIn || _scoutRanThisSession) return;
+        _verifyAndFireScout();
+      });
     } catch (e) {
       setState(() => _status = 'Auto-scout verify failed: $e');
     }
@@ -679,7 +695,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.6-2026-06-24',
+        'scoutVersion': 'v1.7-2026-06-24',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
@@ -747,11 +763,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _fetchAllLabBodies();
     } else if (value == 'toggle-auto-scout') {
       setState(() => _autoScoutOnSignIn = !_autoScoutOnSignIn);
-      // Cancel any pending countdown if the user just disabled it.
+      // Cancel any pending countdown / repoll if the user just disabled.
       if (!_autoScoutOnSignIn) {
-        _scoutAutoFireTimer?.cancel();
-        _scoutAutoFireTimer = null;
-        if (_status.startsWith('Auto-scout in ')) setState(() => _status = 'Auto-scout deferred.');
+        _scoutAutoFireTimer?.cancel();   _scoutAutoFireTimer = null;
+        _scoutAutoRepollTimer?.cancel(); _scoutAutoRepollTimer = null;
+        if (_status.startsWith('Auto-scout')) setState(() => _status = 'Auto-scout deferred.');
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -761,8 +777,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         duration: const Duration(seconds: 4),
       ));
     } else if (value == 'run-portal-scout') {
-      _scoutAutoFireTimer?.cancel();
-      _scoutAutoFireTimer = null;
+      _scoutAutoFireTimer?.cancel();   _scoutAutoFireTimer = null;
+      _scoutAutoRepollTimer?.cancel(); _scoutAutoRepollTimer = null;
       _scoutRanThisSession = false; // allow manual re-trigger
       await _runPortalScout();
     } else if (value == 'retry-failures') {
