@@ -63,6 +63,16 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   // checking for portal changes.
   bool _autoScoutOnSignIn = false;
   bool _scoutRanThisSession = false; // guards against re-fire on session re-login
+
+  // After-auth scrape ORCHESTRATOR — runs every known per-section
+  // scraper in sequence as soon as the user is signed in. The user's
+  // explicit principle: routine ingest should never require a menu tap,
+  // only authenticate-and-wait. See [feedback-auto-run-after-auth].
+  bool _autoOrchestrateOnSignIn = true;
+  bool _orchestratorRanThisSession = false;
+  bool _orchestratorRunning = false;
+  Timer? _orchestratorAutoFireTimer;
+  Timer? _orchestratorAutoRepollTimer;
   // Auto-fire is gated on a per-tick DOM probe (signed-in indicators
   // present; no password input visible). The 8s countdown gives the
   // user buffer to interrupt; after every defer we re-poll every 10s
@@ -92,6 +102,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   void dispose() {
     _scoutAutoFireTimer?.cancel();
     _scoutAutoRepollTimer?.cancel();
+    _orchestratorAutoFireTimer?.cancel();
+    _orchestratorAutoRepollTimer?.cancel();
     super.dispose();
   }
 
@@ -121,6 +133,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (Stanford)')),
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'fetch-clinical-triad', child: Text('Fetch Allergies/Immunizations/Conditions (Stanford)')),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'toggle-auto-orchestrate',
+                child: Text(_autoOrchestrateOnSignIn
+                    ? 'Disable auto-scrape on sign-in'
+                    : 'Enable auto-scrape on sign-in'),
+              ),
+              const PopupMenuItem(value: 'run-full-scrape', child: Text('Run full scrape now')),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'toggle-auto-scout',
@@ -265,6 +285,16 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 _scoutAutoRepollTimer?.cancel();    _scoutAutoRepollTimer = null;
                 if (onSignedIn && _autoScoutOnSignIn && !_scoutRanThisSession && !_batchRunning) {
                   _armScoutAutoFireCountdown();
+                }
+                // After-auth full-scrape orchestrator — same stability
+                // gate + pre-fire DOM probe pattern as the scout (no
+                // interrupting MFA/credentials entry), but fires the
+                // whole ingest pipeline instead.
+                _orchestratorAutoFireTimer?.cancel();    _orchestratorAutoFireTimer = null;
+                _orchestratorAutoRepollTimer?.cancel();  _orchestratorAutoRepollTimer = null;
+                if (onSignedIn && _autoOrchestrateOnSignIn && !_orchestratorRanThisSession
+                    && !_batchRunning && !_orchestratorRunning) {
+                  _armOrchestratorCountdown();
                 }
                 // If this looks like a login page (not signed in yet), inject
                 // the autofill + capture hook with any stored credentials.
@@ -519,6 +549,121 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       });
     } catch (e) {
       setState(() => _status = 'Auto-scout verify failed: $e');
+    }
+  }
+
+  /// Start the visible countdown before kicking off the full scrape
+  /// pipeline. Mirrors _armScoutAutoFireCountdown so the two auto-trigger
+  /// paths behave the same — cancellable on every onLoadStop (URL change
+  /// rearms), deferrable via menu toggle, and never fires while we're
+  /// still on a sign-in screen (the verify probe handles that).
+  void _armOrchestratorCountdown() {
+    _orchestratorAutoFireTimer?.cancel();
+    final fireAt = DateTime.now().add(_scoutAutoFireDelay);
+    setState(() => _status =
+        'Auto-scrape in ${_scoutAutoFireDelay.inSeconds}s (use menu to defer)');
+    _orchestratorAutoFireTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      final remaining = fireAt.difference(DateTime.now()).inSeconds;
+      if (remaining <= 0) {
+        t.cancel();
+        _orchestratorAutoFireTimer = null;
+        if (!mounted || _batchRunning || _orchestratorRunning || _ctrl == null) return;
+        _verifyAndFireOrchestrator();
+      } else if (mounted && !_batchRunning && !_orchestratorRunning) {
+        setState(() =>
+            _status = 'Auto-scrape in ${remaining}s (use menu to defer)');
+      }
+    });
+  }
+
+  /// Pre-fire DOM probe — same logic as the scout's. Don't fire the
+  /// orchestrator (which kicks off long-running sub-fetchers and would
+  /// disrupt the user) until we can see a real signed-in DOM.
+  Future<void> _verifyAndFireOrchestrator() async {
+    if (_ctrl == null) return;
+    try {
+      final probeRaw = await _ctrl!.evaluateJavascript(source: r'''
+        JSON.stringify({
+          url: location.href,
+          hasPasswordInput: !!document.querySelector('input[type="password"]:not([disabled])'),
+          hasLogout: /\blogout\b|\bsign\s*out\b/i.test(
+            (document.body && document.body.innerText || '').slice(0, 8000)),
+        })
+      ''');
+      final probe = jsonDecode(probeRaw?.toString() ?? '{}');
+      final hasPw     = probe['hasPasswordInput'] == true;
+      final hasLogout = probe['hasLogout'] == true;
+      final liveUrl   = (probe['url'] ?? '').toString();
+      final onSigned  = liveUrl.contains(StanfordConfig.signedInMarker);
+      if (onSigned && !hasPw && hasLogout) {
+        _orchestratorAutoRepollTimer?.cancel();
+        _orchestratorAutoRepollTimer = null;
+        _orchestratorRanThisSession = true;
+        await _runFullScrapePipeline();
+        return;
+      }
+      final pathOnly = Uri.tryParse(liveUrl)?.path ?? liveUrl;
+      setState(() => _status = 'Auto-scrape deferred (pw=$hasPw logout=$hasLogout '
+          'url=$pathOnly) — will re-check in ${_scoutAutoRepollWait.inSeconds}s');
+      _orchestratorAutoRepollTimer?.cancel();
+      _orchestratorAutoRepollTimer = Timer(_scoutAutoRepollWait, () {
+        if (!mounted || _batchRunning || _orchestratorRunning
+            || !_autoOrchestrateOnSignIn || _orchestratorRanThisSession) {
+          return;
+        }
+        _verifyAndFireOrchestrator();
+      });
+    } catch (e) {
+      setState(() => _status = 'Auto-scrape verify failed: $e');
+    }
+  }
+
+  /// The orchestrator: runs every known per-section scraper in sequence.
+  /// Each sub-fetcher writes its results to Documents/ as it has always
+  /// done; this method just sequences them. The user's only manual
+  /// control is the red Abort FAB (which sets _abortRequested; we check
+  /// between tasks). Per-task gating via _batchRunning still works —
+  /// each sub-fetcher sets it on entry / clears on finally — and we sit
+  /// outside that, with our own _orchestratorRunning flag preventing
+  /// re-entry.
+  Future<void> _runFullScrapePipeline() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning || _orchestratorRunning) return;
+    setState(() {
+      _orchestratorRunning = true;
+      _abortRequested = false;
+      _status = 'Auto-scrape: starting…';
+    });
+    final tasks = <(String, Future<void> Function())>[
+      ('Lab bodies (Stanford)',                       _fetchAllLabBodies),
+      ('Message bodies (Stanford)',                   _fetchAllMessageBodies),
+      ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
+    ];
+    int ok = 0, failed = 0;
+    try {
+      for (var i = 0; i < tasks.length; i++) {
+        if (_abortRequested) {
+          setState(() => _status = 'Auto-scrape aborted at task ${i+1}/${tasks.length}');
+          break;
+        }
+        final (name, fn) = tasks[i];
+        setState(() => _status = 'Auto-scrape ${i+1}/${tasks.length}: $name');
+        try {
+          await fn();
+          ok++;
+        } catch (e) {
+          failed++;
+          // Best-effort: log to status, then continue to next task.
+          setState(() => _status = 'Auto-scrape task "$name" failed: $e');
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      }
+      if (!_abortRequested) {
+        setState(() => _status = 'Auto-scrape complete: $ok/${tasks.length} OK'
+            '${failed > 0 ? " ($failed failed)" : ""}.');
+      }
+    } finally {
+      setState(() => _orchestratorRunning = false);
     }
   }
 
@@ -905,6 +1050,25 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _fetchAllLabBodies();
     } else if (value == 'fetch-clinical-triad') {
       await _fetchClinicalTriad();
+    } else if (value == 'toggle-auto-orchestrate') {
+      setState(() => _autoOrchestrateOnSignIn = !_autoOrchestrateOnSignIn);
+      if (!_autoOrchestrateOnSignIn) {
+        _orchestratorAutoFireTimer?.cancel();   _orchestratorAutoFireTimer = null;
+        _orchestratorAutoRepollTimer?.cancel(); _orchestratorAutoRepollTimer = null;
+        if (_status.startsWith('Auto-scrape')) setState(() => _status = 'Auto-scrape deferred.');
+      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_autoOrchestrateOnSignIn
+            ? 'Auto-scrape enabled. Runs all known scrapers after each sign-in.'
+            : 'Auto-scrape disabled. Use "Run full scrape now" when ready.'),
+        duration: const Duration(seconds: 4),
+      ));
+    } else if (value == 'run-full-scrape') {
+      _orchestratorAutoFireTimer?.cancel();   _orchestratorAutoFireTimer = null;
+      _orchestratorAutoRepollTimer?.cancel(); _orchestratorAutoRepollTimer = null;
+      _orchestratorRanThisSession = false;
+      await _runFullScrapePipeline();
     } else if (value == 'toggle-auto-scout') {
       setState(() => _autoScoutOnSignIn = !_autoScoutOnSignIn);
       // Cancel any pending countdown / repoll if the user just disabled.
