@@ -290,6 +290,25 @@ class LocalWriter {
   }
 
   /// Append one diag event to the current batch's diag JSONL file. Each
+  /// Clinical list response — one JSON file per section per fetch.
+  /// File: Documents/clinical/stanford-<section>-<ts>.json
+  /// Reading: the Phase 5 Python converter walks this dir, loads the
+  /// most recent file per section, and emits FHIR resources.
+  static Future<String> writeClinicalList(String section, Object listJson) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final clinDir = Directory('${dir.path}/clinical');
+    await clinDir.create(recursive: true);
+    final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
+    final safeSection = section.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+    final file = File('${clinDir.path}/stanford-$safeSection-$ts.json');
+    await file.writeAsString(jsonEncode({
+      'section': section,
+      'fetchedAt': DateTime.now().toUtc().toIso8601String(),
+      'list': listJson,
+    }));
+    return file.path;
+  }
+
   /// Portal-scout spec — one JSON document per scout run. Captures the
   /// portal's API surface as discovered by the autonomous crawl:
   /// per-section URL, snapshot (title/heading/row patterns), and the raw

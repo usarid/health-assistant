@@ -47,6 +47,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Completer<Map<String, dynamic>>? _messageListCompleter;
   Completer<Map<String, dynamic>>? _messageDetailCompleter;
   Completer<Map<String, dynamic>>? _labDetailCompleter;
+  Completer<Map<String, dynamic>>? _clinicalListCompleter;
 
   // Batch state
   int _batchTotal = 0;
@@ -114,6 +115,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'test-fetch-one-lab', child: Text('Test: fetch one lab body')),
               const PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (Stanford)')),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'fetch-clinical-triad', child: Text('Fetch Allergies/Immunizations/Conditions (Stanford)')),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'toggle-auto-scout',
@@ -221,6 +224,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 c.addJavaScriptHandler(
                   handlerName: 'labDetail',
                   callback: _onLabDetailHandler,
+                );
+                c.addJavaScriptHandler(
+                  handlerName: 'clinicalList',
+                  callback: _onClinicalListHandler,
                 );
               },
               onLoadStop: (c, url) async {
@@ -342,6 +349,18 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final m = Map<String, dynamic>.from(args.first as Map);
     if (_labDetailCompleter != null && !_labDetailCompleter!.isCompleted) {
       _labDetailCompleter!.complete(m);
+    }
+    return {'ok': true};
+  }
+
+  /// JS handler for one fetched clinical-list (Allergies / HealthIssues /
+  /// Immunizations / …). Completes [_clinicalListCompleter] with
+  /// {section, ok, status, list, attempts, timings}.
+  Future<dynamic> _onClinicalListHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_clinicalListCompleter != null && !_clinicalListCompleter!.isCompleted) {
+      _clinicalListCompleter!.complete(m);
     }
     return {'ok': true};
   }
@@ -496,6 +515,67 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       });
     } catch (e) {
       setState(() => _status = 'Auto-scout verify failed: $e');
+    }
+  }
+
+  /// Fetch the AllergyIntolerance / Immunization / Condition triad — all
+  /// three use the same POST /myhealth_sso/Clinical/<Section>/Load…
+  /// pattern with an empty body. Token caching matches the lab fetcher
+  /// (Phase 4-2). Each section's JSON lands under
+  /// Documents/clinical/stanford-<section>-<ts>.json.
+  Future<void> _fetchClinicalTriad() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchTotal = 3;
+      _batchIndex = 0;
+      _status = 'Clinical triad: starting…';
+    });
+    final sections = [
+      ('Allergies',     'Allergies/LoadListData'),
+      ('Immunizations', 'Immunizations/LoadImmunizationsList'),
+      ('HealthIssues',  'HealthIssues/LoadListData'),
+    ];
+    final results = <String, Map<String, dynamic>>{};
+    try {
+      for (var i = 0; i < sections.length; i++) {
+        if (_abortRequested) break;
+        final (section, endpointPath) = sections[i];
+        setState(() {
+          _batchIndex = i + 1;
+          _status = 'Clinical triad ${i+1}/3: $section…';
+        });
+        _clinicalListCompleter = Completer<Map<String, dynamic>>();
+        try {
+          await _ctrl!.evaluateJavascript(
+            source: ScrapeJobs.stanfordClinicalLoadList(
+              section: section, endpointPath: endpointPath),
+          );
+        } catch (e) {
+          results[section] = {'ok': false, 'error': 'inject-failed:$e'};
+          continue;
+        }
+        Map<String, dynamic> result;
+        try {
+          result = await _clinicalListCompleter!.future
+              .timeout(const Duration(seconds: 30));
+        } on TimeoutException {
+          results[section] = {'ok': false, 'error': 'timeout-30s'};
+          continue;
+        }
+        results[section] = result;
+        if (result['ok'] == true && result['list'] != null) {
+          await LocalWriter.writeClinicalList(section, result['list']);
+        }
+      }
+      final okCount = results.values.where((r) => r['ok'] == true).length;
+      setState(() => _status = 'Clinical triad done: $okCount/3 OK');
+    } catch (e) {
+      setState(() => _status = 'Clinical triad failed: $e');
+    } finally {
+      setState(() => _batchRunning = false);
     }
   }
 
@@ -819,6 +899,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _testFetchOneLab();
     } else if (value == 'fetch-all-lab-bodies') {
       await _fetchAllLabBodies();
+    } else if (value == 'fetch-clinical-triad') {
+      await _fetchClinicalTriad();
     } else if (value == 'toggle-auto-scout') {
       setState(() => _autoScoutOnSignIn = !_autoScoutOnSignIn);
       // Cancel any pending countdown / repoll if the user just disabled.

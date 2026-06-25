@@ -1478,6 +1478,109 @@ class ScrapeJobs {
 ''';
   }
 
+  /// Generic Stanford "Clinical/<Section>/Load<Action>" list fetcher.
+  /// Same auth pattern as [stanfordLabDetail] — reuses the cached
+  /// __binaStanfordRVT verification token. POSTs to the section's
+  /// endpoint with an empty body and returns the parsed JSON.
+  ///
+  /// Endpoint discovery: tools/portal-scout/specs/stanford-v1.json,
+  /// derived from the v1.12 scout's 17 MB capture. Same shape works
+  /// for Allergies/HealthIssues/Immunizations (and likely others).
+  ///
+  /// Result via callHandler('clinicalList', payload):
+  ///   { section, ok, status, list, error?, attempts, timings }
+  static String stanfordClinicalLoadList({
+    required String section,        // e.g. 'Allergies'
+    required String endpointPath,   // e.g. 'Allergies/LoadListData'
+    Map<String, String>? extraQuery,
+  }) {
+    final sectionJs   = "'${section.replaceAll("'", r"\'")}'";
+    final endpointJs  = "'${endpointPath.replaceAll("'", r"\'")}'";
+    final qsEntries = (extraQuery ?? const {'ComponentNumber': '2', 'lang': 'en-US'})
+        .entries
+        .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+        .join('&');
+    final qsJs = "'$qsEntries'";
+    return '''
+(async () => {
+  const section      = $sectionJs;
+  const endpointPath = $endpointJs;
+  const qs           = $qsJs;
+  const t0 = Date.now();
+  const attempts = [];
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('clinicalList', payload);
+    }
+  }
+  function fail(error, extra) {
+    emit({ section, ok: false, error, attempts, timings: { totalMs: Date.now() - t0 }, ...(extra || {}) });
+  }
+
+  // Step 1 — ensure verification token. Cached on window across calls.
+  const TOKEN_CACHE = '__binaStanfordRVT';
+  let token = window[TOKEN_CACHE];
+  if (!token) {
+    const tT = Date.now();
+    // Any /myhealth_sso/app/* shell page has the __CSRFContainer hidden input.
+    const shellUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/Clinical/Allergies/Index?lang=en-US';
+    try {
+      const shellResp = await fetch(shellUrl, { credentials: 'include', headers: { 'Accept': 'text/html' } });
+      const shellHtml = await shellResp.text();
+      attempts.push({ step: 'shell-fetch', status: shellResp.status, htmlLength: shellHtml.length, elapsedMs: Date.now() - tT });
+      if (!shellResp.ok) return fail('shell-non-ok', { status: shellResp.status });
+      const m = shellHtml.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+      if (!m) return fail('token-not-found-in-shell');
+      token = m[1];
+      window[TOKEN_CACHE] = token;
+    } catch (e) {
+      return fail('shell-fetch-failed', { message: (e && e.message) || String(e) });
+    }
+  } else {
+    attempts.push({ step: 'shell-cached', tokenLen: token.length });
+  }
+
+  // Step 2 — POST the section's LoadListData (or equivalent) endpoint.
+  const tL = Date.now();
+  const apiUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/Clinical/' + endpointPath
+    + (qs ? ('?' + qs) : '');
+  let listResp;
+  try {
+    listResp = await fetch(apiUrl, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        '__RequestVerificationToken': token,
+      },
+      body: '',
+    });
+  } catch (e) {
+    return fail('list-fetch-failed', { message: (e && e.message) || String(e) });
+  }
+  const listText = await listResp.text();
+  attempts.push({ step: 'loadlist', url: apiUrl, status: listResp.status, ok: listResp.ok, respLength: listText.length, elapsedMs: Date.now() - tL });
+
+  if (listResp.status === 401 || listResp.status === 403 || listResp.status === 419) {
+    delete window[TOKEN_CACHE];
+    return fail('list-auth-failed', { status: listResp.status });
+  }
+  if (!listResp.ok) return fail('list-non-ok', { status: listResp.status });
+
+  let list;
+  try {
+    list = JSON.parse(listText);
+  } catch (e) {
+    return fail('list-json-parse-failed', { message: (e && e.message) || String(e), respPreview: listText.slice(0, 200) });
+  }
+
+  emit({ section, ok: true, status: listResp.status, list, attempts, timings: { totalMs: Date.now() - t0 } });
+})();
+''';
+  }
+
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,
