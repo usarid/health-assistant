@@ -1715,6 +1715,12 @@ class ScrapeJobs {
   function classify(path, text) {
     const t = ((text || '') + ' ' + (path || '')).toLowerCase();
     if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert|decline|manage[- ]access|learn[- ]more)\b/.test(t)) return 'skip';
+    // Common meta-links surfaced inside Epic sections that aren't real
+    // sub-sections — they go to the same page (or a static empty state)
+    // and contribute zero new XHRs. Demote so BFS doesn't waste time.
+    if (/^(view all|view instructions|see all|see details|no pcp|view more|show more|expand all)\b/i.test((text || '').trim())) return 'skip';
+    if (/^view all \(\d+\)/i.test((text || '').trim())) return 'skip';
+    if (/^see details and manage/i.test((text || '').trim())) return 'skip';
     if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
     // Per-item drilldowns (specific provider, lab, msg, appointment) are
     // for the per-section item-sampling phase, not the section-level
@@ -2146,6 +2152,12 @@ class ScrapeJobs {
   function classify(path, text) {
     const t = ((text || '') + ' ' + (path || '')).toLowerCase();
     if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert|decline|manage[- ]access|learn[- ]more)\b/.test(t)) return 'skip';
+    // Common meta-links surfaced inside Epic sections that aren't real
+    // sub-sections — they go to the same page (or a static empty state)
+    // and contribute zero new XHRs. Demote so BFS doesn't waste time.
+    if (/^(view all|view instructions|see all|see details|no pcp|view more|show more|expand all)\b/i.test((text || '').trim())) return 'skip';
+    if (/^view all \(\d+\)/i.test((text || '').trim())) return 'skip';
+    if (/^see details and manage/i.test((text || '').trim())) return 'skip';
     if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
     // Per-item drilldowns (specific provider, lab, msg, appointment) are
     // for the per-section item-sampling phase, not the section-level

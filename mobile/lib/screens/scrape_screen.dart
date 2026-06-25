@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:collection' show UnmodifiableListView;
+import 'dart:collection' show Queue, UnmodifiableListView;
 import 'dart:convert';
 import 'dart:math' show Random;
 import 'package:flutter/material.dart';
@@ -628,22 +628,41 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         });
       }
 
-      // Visit each href-bearing clinical section in turn.
+      // BFS visit loop with depth cap. Seed with the top-level visitable
+      // set; after each successful visit, re-enumerate the now-loaded
+      // page and queue any NEW clinical hrefs we haven't seen yet (one
+      // level deeper). Stanford's sections expose their sub-nav only
+      // once the section page itself renders — Allergies/Immunizations/
+      // Conditions/etc. live under /signedin/records/* and aren't
+      // visible from the top home page.
       final sections = <Map<String, dynamic>>[];
-      for (var i = 0; i < visitable.length; i++) {
+      final visitedUrls = <String>{};
+      const int depthCap = 2;        // 0 = top, 1 = sub-nav, stop here
+      const int totalVisitCap = 60;  // safety cap on BFS fan-out
+      final Queue<Map<String, dynamic>> queue = Queue();
+      for (final v in visitable) {
+        queue.add({...v, 'depth': 0, 'discoveredFrom': null});
+      }
+      int visitNum = 0;
+      while (queue.isNotEmpty && visitNum < totalVisitCap) {
         if (_abortRequested) {
-          setState(() => _status = 'Scout aborted at $i/${visitable.length}');
+          setState(() => _status = 'Scout aborted at $visitNum / queue+done=${queue.length + sections.length}');
           break;
         }
-        final link = visitable[i];
-        final href = link['href'] as String;
+        final link = queue.removeFirst();
+        final href = (link['href'] as String?) ?? '';
+        if (href.isEmpty) continue;
+        if (visitedUrls.contains(href)) continue;
+        visitedUrls.add(href);
+        visitNum++;
+        final depth = link['depth'] as int;
         final label = (link['text'] as String? ?? '').isNotEmpty
             ? link['text']
             : (link['path'] ?? href);
         setState(() {
-          _batchIndex = i + 1;
-          _batchTotal = visitable.length;
-          _status = 'Scout ${i + 1}/${visitable.length}: $label';
+          _batchIndex = visitNum;
+          _batchTotal = sections.length + queue.length + 1;
+          _status = 'Scout #$visitNum (depth $depth, queued ${queue.length}): $label';
         });
 
         // Soft nav via JS location.href — Stanford's SPA invalidates the
@@ -664,9 +683,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         // Let in-flight XHRs settle. 3s catches most Epic dashboards.
         await Future.delayed(const Duration(seconds: 3));
 
-        // Bootstrap re-runs automatically on the new document via the
-        // initialUserScripts hook; no explicit re-injection needed.
-
         // Snapshot + drain.
         final snapRaw = await _ctrl!.evaluateJavascript(source: ScrapeJobs.scoutSnapshotCurrent());
         final snap = jsonDecode(snapRaw?.toString() ?? '{}');
@@ -677,18 +693,50 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           'requestedHref': href,
           'requestedText': link['text'],
           'classification': link['classification'],
+          'depth': depth,
+          'discoveredFrom': link['discoveredFrom'],
           'snapshot': snap,
           'capturedXhrCount': caps.length,
           'capturedXhrs': caps,
         });
+
+        int discovered = 0;
+        // RECURSION: re-enumerate from the newly-loaded section page;
+        // any unvisited clinical hrefs become depth+1 queue entries.
+        if (depth + 1 < depthCap) {
+          try {
+            final reAsync = await _ctrl!.callAsyncJavaScript(functionBody: '''
+              if (!window.__portalScout || typeof window.__portalScout.enumerateAllFrames !== 'function') {
+                return JSON.stringify({ok:false, candidates:[]});
+              }
+              const r = await window.__portalScout.enumerateAllFrames(2500);
+              return JSON.stringify(r);
+            ''');
+            final reDecoded = jsonDecode(reAsync?.value?.toString() ?? '{}');
+            final newCands = ((reDecoded['candidates'] ?? const []) as List)
+                .where((c) => c is Map && c['classification'] == 'clinical' && c['href'] != null)
+                .cast<Map>();
+            for (final c in newCands) {
+              final h = c['href'] as String;
+              if (visitedUrls.contains(h)) continue;
+              if (queue.any((q) => q['href'] == h)) continue;
+              queue.add({...Map<String, dynamic>.from(c), 'depth': depth + 1, 'discoveredFrom': href});
+              discovered++;
+            }
+          } catch (_) { /* keep going */ }
+        }
+
         await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
           'phase': 'visited',
-          'i': i + 1,
+          'visitNum': visitNum,
+          'depth': depth,
           'href': href,
           'label': label,
           'finalUrl': snap['url'],
           'rowPatterns': (snap['rowPatterns'] as List?)?.length ?? 0,
           'xhrCount': caps.length,
+          'discoveredSubLinks': discovered,
+          'queueAfter': queue.length,
         });
       }
 
@@ -696,7 +744,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.11-2026-06-25',
+        'scoutVersion': 'v1.12-2026-06-25',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
