@@ -696,17 +696,26 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.9-2026-06-24',
+        'scoutVersion': 'v1.10-2026-06-25',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
         'enumeration': {
           'totalCandidates': allLinks.length,
           'byElementKind': byKind,
+          'byFrame': byFrame,
+          'framesResponded': frames,
           'clinical': clinical.length,
           'visited': sections.length,
           'clickOnlySkipped': clickOnly.length,
         },
+        // FULL candidate list — every element the per-frame enumerators
+        // surfaced, with its classification. v1.10 added this because
+        // the only-clinical view obscures why specific top-nav items
+        // (MESSAGES/VISITS/PROCEDURES) aren't being visited. Inspect
+        // here to see whether each missing item was skipped, demoted to
+        // 'item', or genuinely missing from the DOM.
+        'allCandidates': allLinks,
         'clickOnlyTargets': clickOnly,
         'sections': sections,
       };
