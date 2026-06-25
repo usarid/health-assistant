@@ -254,10 +254,16 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                     final remaining = fireAt.difference(DateTime.now()).inSeconds;
                     if (remaining <= 0) {
                       t.cancel(); _scoutAutoFireTimer = null;
-                      if (mounted && _onSignedInPage && !_batchRunning) {
-                        _scoutRanThisSession = true;
-                        _runPortalScout();
-                      }
+                      if (!mounted || _batchRunning || _ctrl == null) return;
+                      // PRE-FIRE VERIFICATION — onLoadStop URLs lag behind
+                      // SPA route changes, so the URL we *think* we're on may
+                      // not be the URL we're actually on. Probe the live page
+                      // for signed-in indicators (no password input visible
+                      // + a Logout affordance present) before letting the
+                      // scout interrupt anything. If it doesn't look signed
+                      // in, defer silently — the next onLoadStop will rearm
+                      // the timer if the user does complete sign-in.
+                      _verifyAndFireScout();
                     } else if (mounted && !_batchRunning) {
                       setState(() => _status =
                           'Auto-scout in ${remaining}s (use menu to defer)');
@@ -439,6 +445,42 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     }
     if (mounted) setState(() => _diagLine = summary);
     return {'ok': true};
+  }
+
+  /// Verify that the live page is actually a signed-in session BEFORE
+  /// kicking off the scout. The scout navigates to /signedin/home — which
+  /// is disruptive if the user is mid-MFA or on the sign-in form. Run a
+  /// quick JS check first; if it doesn't look signed in, abort silently
+  /// (the next onLoadStop will rearm the countdown if real sign-in
+  /// happens later).
+  Future<void> _verifyAndFireScout() async {
+    if (_ctrl == null) return;
+    try {
+      final probeRaw = await _ctrl!.evaluateJavascript(source: r'''
+        JSON.stringify({
+          url: location.href,
+          hasPasswordInput: !!document.querySelector('input[type="password"]:not([disabled])'),
+          hasLogout: /\blogout\b|\bsign\s*out\b/i.test(
+            (document.body && document.body.innerText || '').slice(0, 8000)),
+          bodyHead: (document.body && document.body.innerText || '')
+            .replace(/\s+/g, ' ').slice(0, 200),
+        })
+      ''');
+      final probe = jsonDecode(probeRaw?.toString() ?? '{}');
+      final hasPw = probe['hasPasswordInput'] == true;
+      final hasLogout = probe['hasLogout'] == true;
+      final liveUrl = (probe['url'] ?? '').toString();
+      final onHome = liveUrl.contains(_autoFireHomePathFragment);
+      if (!onHome || hasPw || !hasLogout) {
+        setState(() => _status = 'Auto-scout deferred — sign-in not confirmed '
+            '(pw=$hasPw, logout=$hasLogout, url=${Uri.tryParse(liveUrl)?.path ?? liveUrl})');
+        return;
+      }
+      _scoutRanThisSession = true;
+      await _runPortalScout();
+    } catch (e) {
+      setState(() => _status = 'Auto-scout verify failed: $e');
+    }
   }
 
   /// Autonomous portal sweep — installs the page-context API capture,
@@ -637,7 +679,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.5-2026-06-24',
+        'scoutVersion': 'v1.6-2026-06-24',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,
