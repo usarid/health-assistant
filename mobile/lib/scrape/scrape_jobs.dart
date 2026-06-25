@@ -1581,6 +1581,83 @@ class ScrapeJobs {
 ''';
   }
 
+  /// Generic Stanford orion/* fetcher — cookies-only auth (no CSRF
+  /// token required, unlike the /Clinical/* family). Captures the
+  /// JSON response and emits via `clinicalList` handler so the same
+  /// Dart-side completer wiring works for the orchestrator. Supports
+  /// GET (default) and POST with an optional JSON body.
+  ///
+  /// Endpoint discovery: tools/portal-scout/specs/stanford-v1.json.
+  /// Used for:
+  ///   - Procedures: POST /orion/public/ajax/v1/surgery/allSurgeries
+  ///     with body {"numOfDays":N}
+  ///   - Appointments: GET /orion/public/ajax/v1/appointments/futureappointments
+  ///   - Care Resources, Orders & Referrals, etc.
+  static String stanfordOrionFetch({
+    required String section,        // friendly label, e.g. 'Procedures'
+    required String urlPath,        // e.g. '/orion/public/ajax/v1/surgery/allSurgeries'
+    String method = 'GET',
+    String? jsonBody,
+  }) {
+    final sectionJs = "'${section.replaceAll("'", r"\'")}'";
+    final pathJs    = "'${urlPath.replaceAll("'", r"\'")}'";
+    final methodJs  = "'${method.toUpperCase()}'";
+    final bodyJs    = jsonBody == null
+        ? 'null'
+        : "'${jsonBody.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    return '''
+(async () => {
+  const section = $sectionJs;
+  const path    = $pathJs;
+  const method  = $methodJs;
+  const body    = $bodyJs;
+  const t0 = Date.now();
+  const attempts = [];
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('clinicalList', payload);
+    }
+  }
+  function fail(error, extra) {
+    emit({ section, ok: false, error, attempts, timings: { totalMs: Date.now() - t0 }, ...(extra || {}) });
+  }
+
+  const url = 'https://myhealth.stanfordhealthcare.org' + path;
+  const init = {
+    method,
+    credentials: 'include',
+    headers: { 'Accept': 'application/json' },
+  };
+  if (body != null) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = body;
+  }
+
+  const tCall = Date.now();
+  let resp;
+  try {
+    resp = await fetch(url, init);
+  } catch (e) {
+    return fail('orion-fetch-failed', { message: (e && e.message) || String(e) });
+  }
+  const text = await resp.text();
+  attempts.push({ step: 'orion', url, method, status: resp.status, ok: resp.ok, respLength: text.length, elapsedMs: Date.now() - tCall });
+
+  if (!resp.ok) return fail('orion-non-ok', { status: resp.status });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return fail('orion-json-parse-failed', { message: (e && e.message) || String(e), respPreview: text.slice(0, 200) });
+  }
+
+  emit({ section, ok: true, status: resp.status, list: parsed, attempts, timings: { totalMs: Date.now() - t0 } });
+})();
+''';
+  }
+
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,

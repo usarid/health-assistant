@@ -638,6 +638,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       ('Lab bodies (Stanford)',                       _fetchAllLabBodies),
       ('Message bodies (Stanford)',                   _fetchAllMessageBodies),
       ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
+      ('Orion endpoints (Procedures / Appointments)', _fetchOrionEndpoints),
     ];
     int ok = 0, failed = 0;
     try {
@@ -664,6 +665,64 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       }
     } finally {
       setState(() => _orchestratorRunning = false);
+    }
+  }
+
+  /// Fetch Procedures (surgery/allSurgeries) + Appointments
+  /// (futureappointments) — both /orion/public/ajax/v1/* JSON endpoints,
+  /// cookie-only auth (no CSRF token like the /Clinical/* endpoints
+  /// require). Reuses the `clinicalList` JS handler so the bridge
+  /// completer is the same as the clinical triad.
+  Future<void> _fetchOrionEndpoints() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchTotal = 2;
+      _batchIndex = 0;
+      _status = 'Orion endpoints: starting…';
+    });
+    // (section label, urlPath, method, jsonBody)
+    final endpoints = <(String, String, String, String?)>[
+      ('Procedures',    '/orion/public/ajax/v1/surgery/allSurgeries',
+                        'POST', '{"numOfDays":730}'),
+      ('Appointments',  '/orion/public/ajax/v1/appointments/futureappointments',
+                        'GET',  null),
+    ];
+    try {
+      for (var i = 0; i < endpoints.length; i++) {
+        if (_abortRequested) break;
+        final (section, path, method, body) = endpoints[i];
+        setState(() {
+          _batchIndex = i + 1;
+          _status = 'Orion ${i+1}/${endpoints.length}: $section…';
+        });
+        _clinicalListCompleter = Completer<Map<String, dynamic>>();
+        try {
+          await _ctrl!.evaluateJavascript(
+            source: ScrapeJobs.stanfordOrionFetch(
+              section: section, urlPath: path, method: method, jsonBody: body),
+          );
+        } catch (e) {
+          continue;
+        }
+        Map<String, dynamic> result;
+        try {
+          result = await _clinicalListCompleter!.future
+              .timeout(const Duration(seconds: 30));
+        } on TimeoutException {
+          continue;
+        }
+        if (result['ok'] == true && result['list'] != null) {
+          await LocalWriter.writeClinicalList(section, result['list']);
+        }
+      }
+      setState(() => _status = 'Orion endpoints done.');
+    } catch (e) {
+      setState(() => _status = 'Orion endpoints failed: $e');
+    } finally {
+      setState(() => _batchRunning = false);
     }
   }
 
