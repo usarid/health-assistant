@@ -696,7 +696,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.10-2026-06-25',
+        'scoutVersion': 'v1.11-2026-06-25',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,

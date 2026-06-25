@@ -1719,12 +1719,16 @@ class ScrapeJobs {
     // Per-item drilldowns (specific provider, lab, msg, appointment) are
     // for the per-section item-sampling phase, not the section-level
     // scout. Identify them by per-item query parameters or by a
-    // provider-name-shaped link text (Title Case + clinical suffix).
+    // provider-name-shaped link text (Title Case + clinical suffix
+    // with optional middle initial).
     if (/[?&](serid|ticketId|eorderid|msgId|csn|encType|orderId|reportId|noteId|docId|encounterId)=/i.test(path || '')) return 'item';
-    if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z'.]+)+,?\s+(MD|DO|NP|PA|RN|RD|PT|OT|PharmD|PHARMD|MA|LCSW|PsyD|DDS|DPT)$/.test(text || '')) return 'item';
+    if (/^[A-Z][a-z]+(?:\s+(?:[A-Z]\.?|[A-Z][a-z'.]+))+,?\s+(MD|DO|NP|PA|RN|RD|PT|OT|PharmD|PHARMD|MA|LCSW|PsyD|DDS|DPT)\.?$/.test(text || '')) return 'item';
     if (/^send (a )?message to /i.test(text || '')) return 'item';
-    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research|inbox|outbox|letter|chart|profile-?summary)\b/.test(t)) return 'clinical';
-    if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
+    // Plural-tolerant clinical match — Stanford's top nav reads MESSAGES /
+    // VISITS / PROCEDURES, and \bmessage\b fails on "messages" because
+    // there's no word boundary between 'message' and 's'. The optional s?
+    // before \b fixes it without false positives.
+    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|research|inbox|outbox|letter|chart|profile-?summary)s?\b/.test(t)) return 'clinical';
     return 'other';
   }
   function visibleText(el) {
@@ -2146,12 +2150,16 @@ class ScrapeJobs {
     // Per-item drilldowns (specific provider, lab, msg, appointment) are
     // for the per-section item-sampling phase, not the section-level
     // scout. Identify them by per-item query parameters or by a
-    // provider-name-shaped link text (Title Case + clinical suffix).
+    // provider-name-shaped link text (Title Case + clinical suffix
+    // with optional middle initial).
     if (/[?&](serid|ticketId|eorderid|msgId|csn|encType|orderId|reportId|noteId|docId|encounterId)=/i.test(path || '')) return 'item';
-    if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z'.]+)+,?\s+(MD|DO|NP|PA|RN|RD|PT|OT|PharmD|PHARMD|MA|LCSW|PsyD|DDS|DPT)$/.test(text || '')) return 'item';
+    if (/^[A-Z][a-z]+(?:\s+(?:[A-Z]\.?|[A-Z][a-z'.]+))+,?\s+(MD|DO|NP|PA|RN|RD|PT|OT|PharmD|PHARMD|MA|LCSW|PsyD|DDS|DPT)\.?$/.test(text || '')) return 'item';
     if (/^send (a )?message to /i.test(text || '')) return 'item';
-    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research|inbox|outbox|letter|chart|profile-?summary)\b/.test(t)) return 'clinical';
-    if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
+    // Plural-tolerant clinical match — Stanford's top nav reads MESSAGES /
+    // VISITS / PROCEDURES, and \bmessage\b fails on "messages" because
+    // there's no word boundary between 'message' and 's'. The optional s?
+    // before \b fixes it without false positives.
+    if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|research|inbox|outbox|letter|chart|profile-?summary)s?\b/.test(t)) return 'clinical';
     return 'other';
   }
   function visibleText(el) {
