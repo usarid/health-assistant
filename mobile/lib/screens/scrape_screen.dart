@@ -584,16 +584,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           .where((l) => l is Map && l['classification'] == 'clinical')
           .map<Map<String, dynamic>>((l) => Map<String, dynamic>.from(l as Map))
           .toList();
+      // Count what got demoted to 'item' (per-item drilldowns) — these
+      // are the per-section sample targets for the next scout phase.
+      final itemCount = allLinks.where((l) => l is Map && l['classification'] == 'item').length;
+      final skipCount = allLinks.where((l) => l is Map && l['classification'] == 'skip').length;
       setState(() {
         _batchTotal = clinical.length;
-        _status = 'Scout: ${clinical.length} clinical sections in $frames frames '
-            '(${allLinks.length} candidates total)';
+        _status = 'Scout: ${clinical.length} sections + $itemCount items '
+            'in $frames frames (${allLinks.length} candidates)';
       });
       await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
         'phase': 'enumerated',
         'framesResponded': frames,
         'totalCandidates': allLinks.length,
         'clinicalLinks': clinical.length,
+        'itemLinks': itemCount,
+        'skipLinks': skipCount,
         'byElementKind': byKind,
         'byFrame': byFrame,
         'home': _currentUrl,
@@ -690,7 +696,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
         'portal': 'stanford',
-        'scoutVersion': 'v1.8-2026-06-24',
+        'scoutVersion': 'v1.9-2026-06-24',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
         'home': _currentUrl,

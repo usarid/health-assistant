@@ -1714,8 +1714,15 @@ class ScrapeJobs {
   // ── Enumeration logic (runs locally in every frame) ────────────────
   function classify(path, text) {
     const t = ((text || '') + ' ' + (path || '')).toLowerCase();
-    if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert)\b/.test(t)) return 'skip';
+    if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert|decline|manage[- ]access|learn[- ]more)\b/.test(t)) return 'skip';
     if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
+    // Per-item drilldowns (specific provider, lab, msg, appointment) are
+    // for the per-section item-sampling phase, not the section-level
+    // scout. Identify them by per-item query parameters or by a
+    // provider-name-shaped link text (Title Case + clinical suffix).
+    if (/[?&](serid|ticketId|eorderid|msgId|csn|encType|orderId|reportId|noteId|docId|encounterId)=/i.test(path || '')) return 'item';
+    if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z'.]+)+,?\s+(MD|DO|NP|PA|RN|RD|PT|OT|PharmD|PHARMD|MA|LCSW|PsyD|DDS|DPT)$/.test(text || '')) return 'item';
+    if (/^send (a )?message to /i.test(text || '')) return 'item';
     if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research|inbox|outbox|letter|chart|profile-?summary)\b/.test(t)) return 'clinical';
     if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
     return 'other';
@@ -2134,8 +2141,15 @@ class ScrapeJobs {
 (() => {
   function classify(path, text) {
     const t = ((text || '') + ' ' + (path || '')).toLowerCase();
-    if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert)\b/.test(t)) return 'skip';
+    if (/\b(billing|payment|invoice|account|settings|preferences|profile|help|faq|support|logout|sign[- ]?out|privacy|terms|about|legal|advert|decline|manage[- ]access|learn[- ]more)\b/.test(t)) return 'skip';
     if (/\.(pdf|jpg|jpeg|png|gif|css|js)(\?|$)/.test(path || '')) return 'skip';
+    // Per-item drilldowns (specific provider, lab, msg, appointment) are
+    // for the per-section item-sampling phase, not the section-level
+    // scout. Identify them by per-item query parameters or by a
+    // provider-name-shaped link text (Title Case + clinical suffix).
+    if (/[?&](serid|ticketId|eorderid|msgId|csn|encType|orderId|reportId|noteId|docId|encounterId)=/i.test(path || '')) return 'item';
+    if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z'.]+)+,?\s+(MD|DO|NP|PA|RN|RD|PT|OT|PharmD|PHARMD|MA|LCSW|PsyD|DDS|DPT)$/.test(text || '')) return 'item';
+    if (/^send (a )?message to /i.test(text || '')) return 'item';
     if (/\b(record|result|message|appointment|visit|note|allergy|allergie|immuniz|vaccin|condition|problem|medication|medicine|med-?list|procedure|order|referral|questionnaire|history|reminder|goal|care[- ]?plan|care[- ]?team|advance[- ]?care|covid|lab|test|document|tracking|access|research|inbox|outbox|letter|chart|profile-?summary)\b/.test(t)) return 'clinical';
     if (/\b(signedin|home|dashboard)\b/.test(path || '')) return 'home';
     return 'other';
