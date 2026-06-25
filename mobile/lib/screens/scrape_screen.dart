@@ -57,7 +57,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   DateTime? _batchStartedAt;
 
   // Portal-scout state
-  bool _autoScoutOnSignIn = true;   // single-user dev default; toggle in overflow menu
+  // Default OFF post-discovery (2026-06-25): the v1.12 scout produced the
+  // Stanford spec we needed; routine sign-ins shouldn't spend 3 min
+  // re-scouting. Toggle on via menu when re-mapping a new portal or
+  // checking for portal changes.
+  bool _autoScoutOnSignIn = false;
   bool _scoutRanThisSession = false; // guards against re-fire on session re-login
   // Auto-fire is gated on a per-tick DOM probe (signed-in indicators
   // present; no password input visible). The 8s countdown gives the
