@@ -1,0 +1,127 @@
+{
+  "portal": "stanford",
+  "specVersion": "v1-2026-06-25",
+  "sourceScout": "portal-scout-spec-stanford-2026-06-25T00-43-57",
+  "endpoints": [
+    {
+      "section": "Test Results",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/Clinical/TestResults/GetPageSet",
+      "fhirResource": "DiagnosticReport+Observation",
+      "notes": "Already partially covered by Phase 4 (labs); GetDetails is per-result"
+    },
+    {
+      "section": "Inbox",
+      "method": "POST",
+      "urlPath": "/Private/Ajax/V1/Mailbox/Page",
+      "fhirResource": "Communication",
+      "notes": "Already covered by Phase 3"
+    },
+    {
+      "section": "Sent",
+      "method": "POST",
+      "urlPath": "/Private/Ajax/V1/Outbox/Page",
+      "fhirResource": "Communication",
+      "notes": "Sibling of Inbox \u2014 same shape, different folder"
+    },
+    {
+      "section": "Letters",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/api/letters/GetLettersList",
+      "fhirResource": "Communication or DocumentRef",
+      "notes": "Different endpoint; verify shape"
+    },
+    {
+      "section": "My Visits",
+      "method": "GET",
+      "urlPath": "/orion/public/ajax/v1/appointments/futureappointments",
+      "fhirResource": "Appointment",
+      "notes": "Stanford-side appointment list, separate from past Encounters"
+    },
+    {
+      "section": "Orders & Referrals",
+      "method": "GET",
+      "urlPath": "/orion/public/ajax/v1/openOrders/enhanced",
+      "fhirResource": "ServiceRequest",
+      "notes": "Pending orders + referrals; new resource type"
+    },
+    {
+      "section": "COVID-19",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/Clinical/CovidStatus/LoadCovidStatus",
+      "fhirResource": "Observation or DocumentRef",
+      "notes": "Vaccination + test status digest"
+    },
+    {
+      "section": "Current Health Issues",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/Clinical/HealthIssues/LoadListData",
+      "fhirResource": "Condition",
+      "notes": "Problem list \u2014 44 KB response, likely the main one"
+    },
+    {
+      "section": "Medicines",
+      "method": "GET",
+      "urlPath": "/myhealth_sso/Clinical/Medications",
+      "fhirResource": "MedicationRequest",
+      "notes": "271 KB \u2014 large; supplements existing MedRequest data"
+    },
+    {
+      "section": "Allergies",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/Clinical/Allergies/LoadListData",
+      "fhirResource": "AllergyIntolerance",
+      "notes": "TIER-A in COVERAGE_MATRIX (currently 3 in HAPI, all historical-import)"
+    },
+    {
+      "section": "Immunizations",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/Clinical/Immunizations/LoadImmunizationsList",
+      "fhirResource": "Immunization",
+      "notes": "TIER-A; currently all 13 from historical-import"
+    },
+    {
+      "section": "Patient Visit Records",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/api/record-download/LoadSingleVisits",
+      "fhirResource": "Encounter+DocumentRef",
+      "notes": "81 KB; rich; may overlap existing visit ingest"
+    },
+    {
+      "section": "Medical History",
+      "method": "POST",
+      "urlPath": "/myhealth_sso/api/histories/LoadHistoriesViewModel",
+      "fhirResource": "FamilyMemberHistory+Condition",
+      "notes": "Family/social/surgical history"
+    },
+    {
+      "section": "Care Resources",
+      "method": "POST",
+      "urlPath": "/orion/public/ajax/v1/patienteducation/encounterlist",
+      "fhirResource": "DocumentRef",
+      "notes": "Patient education materials per encounter"
+    },
+    {
+      "section": "Procedures",
+      "method": "POST",
+      "urlPath": "/orion/public/ajax/v1/surgery/allSurgeries",
+      "fhirResource": "Procedure",
+      "notes": "Stanford surgical list \u2014 TIER-A gap"
+    }
+  ],
+  "unmappedSections": [
+    "Documents",
+    "Advance Care Planning",
+    "Health Reminders",
+    "Research",
+    "COMPOSE",
+    "Drafts",
+    "MAKE APPOINTMENT",
+    "Invitations1",
+    "Requested Records",
+    "Questionnaires",
+    "My Goals/Action Plans",
+    "Health Tracking",
+    "(See full scout-spec; these either had empty responses for this user, or share generic endpoints \u2014 need per-section investigation to confirm)"
+  ]
+}
