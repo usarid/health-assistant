@@ -7,8 +7,8 @@
 - Counts are point-in-time. Re-run the counts block (see Appendix) and bump "Last counts taken" whenever you update the matrix. Don't chase small drift.
 - Status changes get a one-line entry in the changelog at the bottom — keeps the history without bloating the matrix.
 
-**Last counts taken:** 2026-06-23 post-consolidation (HAPI on localhost:8090).
-**Coverage matrix version:** 3.
+**Last counts taken:** 2026-06-25 post-clinical-triad ingest (HAPI on localhost:8090).
+**Coverage matrix version:** 4.
 
 ---
 
@@ -43,7 +43,7 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 | Practitioner | — | ❌ | ❌ | 0 | ❌ | ❌ | Senders/recipients carried as `.display` only; no first-class Practitioner records. Low priority. |
 | Encounter (past visits) | Stanford, MSKCC, UCSF | ✅ | ✅ via mobile per-visit notes | 543 | ✅ Home / appointment details | ✅ | Stable. |
 | Appointment (future visits) | Stanford | 🟡 some in Home tab | n/a | **0** ❌ | ✅ rendered from `api/profile` | ⚠️ | Surfaced in UI but not stored as FHIR Appointment resources. Inconsistency worth fixing. |
-| Condition (problem list) | mixed | ✅ | ✅ | 65 | ✅ Profile | ✅ | Stable. |
+| Condition (problem list) | mixed + Stanford native | ✅ | ✅ | 79 | ✅ Profile | ✅ | **Phase 5 Stanford native scrape shipped (2026-06-25)** via `POST /myhealth_sso/Clinical/HealthIssues/LoadListData`. +14 from Stanford; pre-existing 65 across other sources. |
 | Procedure | mixed | 🟡 | ❌ for non-trivial ones | **59** ❌ | ✅ list only | 🟡 list only | **Gap.** Colonoscopy (Jan 2026) example has no body — that report content lives in the Stanford pathology DR. Need same per-result body scrape as labs (Phase 4). |
 | Observation | mixed | ✅ | ✅ | ~40,000 | ✅ Search, Profile vitals | ✅ | Strong. Quality patches in `DATA_QUALITY_CHECKLIST.md`. **Phase 4-3 added 3,555 structured component-result Observations from 479 Stanford labs** (`urn:stanford:myhealth:component-result`). |
 | DiagnosticReport (lab/imaging/path) | Stanford, MSKCC, LabCorp | ✅ 489 from Stanford as `urn:stanford:myhealth:order` | ✅ Stanford (479/489 = 98%) | 2,103 | ✅ Search | ✅ for the 479 Stanford labs (component-level Observations) | **Phase 4 complete for Stanford labs.** Two-step API (GetDetails + LoadReportContent) reverse-engineered via portal-scout; ~70s for the full batch. 10 outliers (imaging-only/comments-only/metadata-only) skipped. |
@@ -52,8 +52,8 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 | MedicationRequest | mixed | ✅ | ✅ | 739 | ✅ Meds tab | ✅ | Strong. |
 | MedicationStatement | — | ❌ | ❌ | **1** ❌ | ❌ | ❌ | Effectively empty. Patient-reported meds + adherence data not captured. |
 | Medication | — | ❌ | ❌ | 0 | ❌ | ❌ | Inline-referenced via MedicationRequest only. |
-| AllergyIntolerance | historical-import + apple-health-records | ⚠️ | ⚠️ | **3** ❌ | ✅ Profile (sparse) | 🟡 | 2/3 from `bina-historical-import` (the early consolidated dump), 1/3 from `bina-apple-health-records`. **Per-portal scrapers surface zero** — they don't enumerate allergies yet. If we lost the historical bucket we'd lose most of what we have. |
-| Immunization | historical-import only | 🟡 | 🟡 | **13** ❌ | ✅ Profile | 🟡 | **All 13 come from `bina-historical-import`** (early consolidated dump, dated 2007–2023, mostly COVID series). Per-portal scrapers surface zero immunizations. Single-source-of-truth — losing the historical bucket = losing all immunization history. |
+| AllergyIntolerance | Stanford native + historical-import + apple-health-records | ✅ Stanford | ✅ Stanford | **4** | ✅ Profile | ✅ | **Phase 5 Stanford native scrape shipped (2026-06-25)** via `POST /myhealth_sso/Clinical/Allergies/LoadListData`. +1 from Stanford; combined with prior historical + apple-health-records sources = 4 total. |
+| Immunization | Stanford native + historical-import | ✅ Stanford | ✅ Stanford | **33** | ✅ Profile | ✅ | **Phase 5 Stanford native scrape shipped (2026-06-25)** via `POST /myhealth_sso/Clinical/Immunizations/LoadImmunizationsList`. 13 Stanford rows fanned out to 20 dose events (boosters expand 1:N); combined with 13 historical = 33 total. |
 | CarePlan | — | ❌ | ❌ | **1** ❌ | ❌ | ❌ | Empty. |
 | CareTeam | — | ❌ | ❌ | **0** ❌ | ❌ | ❌ | Empty. Stanford UI shows care team prominently — scraper gap. Useful for "who do I message about X." |
 | Goal | — | ❌ | ❌ | 0 | ❌ | ❌ | Empty. |
@@ -167,6 +167,7 @@ Bump the "Last counts taken" date when you update. If a count's status emoji cha
 
 ## Changelog
 
+- **2026-06-25** — v4. Phase 5 Stanford clinical-triad ingest: Allergies (3→4), Immunizations (13→33; 13 native rows fan out to 20 dose-events), Conditions (65→79). Endpoint contracts mined from the v1.12 portal-scout's full-surface capture and templated through `ScrapeJobs.stanfordClinicalLoadList`. Same pattern unblocks the remaining 12 sections mapped in `tools/portal-scout/specs/stanford-v1.json`.
 - **2026-06-23 (later)** — v3. Patient consolidation: canonical `Patient/bina-user-urisarid` + 15 sub-identity Patients (one per data source); 43,879 resources reassigned to point at the matching sub-identity. Subject coverage now 100% across all major resource types (was 5%). Known limitation: HAPI's `Patient/$everything` doesn't follow `Patient.link` by default — the live app uses per-type `subject=Patient/X` searches and doesn't hit this. See `tools/patient_consolidation/consolidate_patients.py`.
 - **2026-06-23** — v2. Phase 4 complete for Stanford labs: 3,555 structured component-result Observations added across 479 DRs. Discovered systemic pre-existing gap: 1,991/2,103 DRs lack `subject` reference (only 112 are patient-linked), and 7 Patient resources exist for one human — needs dedup + backfill.
 - **2026-06-17** — v1 created. Reflects Phase 3 (messages) shipped, Phase 4 (lab bodies) in flight. Supersedes the per-resource sections of `SCRAPER_AUDIT_2026-05.md`.
