@@ -1718,11 +1718,21 @@ class ScrapeJobs {
   if (!resp.ok) return fail('meds-non-ok', { status: resp.status });
 
   // Locate the script block that constructs MedicationRefillWorkflowController.
-  // The block starts with:  var medicationRefillWorkflowController = new $$WP.Clinical....
-  // and contains the med data as the second constructor argument.
-  const m = text.match(/<script[^>]*>[\s\S]*?var\s+medicationRefillWorkflowController[\s\S]*?<\/script>/);
-  if (!m) return fail('med-block-not-found', { htmlLen: text.length });
-  const scriptBody = m[0].replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '');
+  // Boundary-anchored extraction (not regex — regex is too greedy across
+  // adjacent <script> tags; a 2026-08-10 attempt grabbed 294 KB of mixed
+  // HTML+JS and choked eval with "Unexpected token '<'"). Walk backwards
+  // from the target var declaration to the LAST '<script>' opening,
+  // forward to the FIRST '</script>' closing — that's exactly one block.
+  const NEEDLE = 'var medicationRefillWorkflowController';
+  const needleAt = text.indexOf(NEEDLE);
+  if (needleAt < 0) return fail('med-needle-not-found', { htmlLen: text.length });
+  const openTagAt = text.lastIndexOf('<script', needleAt);
+  if (openTagAt < 0) return fail('med-open-script-not-found');
+  const openTagEnd = text.indexOf('>', openTagAt);
+  if (openTagEnd < 0 || openTagEnd > needleAt) return fail('med-open-script-malformed');
+  const closeTagAt = text.indexOf('</script>', needleAt);
+  if (closeTagAt < 0) return fail('med-close-script-not-found');
+  const scriptBody = text.substring(openTagEnd + 1, closeTagAt);
   attempts.push({ step: 'script-block-extracted', scriptLen: scriptBody.length });
 
   // Stub every global the script touches so eval doesn't blow up on
