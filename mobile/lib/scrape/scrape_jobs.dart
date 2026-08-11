@@ -1748,18 +1748,21 @@ class ScrapeJobs {
       window.__binaCapturedMedications = data;
     };
     window.$afe = window.$afe || { select: function () { return null; } };
-    // Evaluate the block. new StubFn() returns an empty object; our stub's
-    // side-effect populates window.__binaCapturedMedications with the data.
-    // Use Function constructor rather than raw eval to keep this in a
-    // controlled scope; the script itself is our-own-fetched text so the
-    // trust boundary is the same as any other page-context script.
-    (new Function(scriptBody))();
+    // Wrap in try/catch INSIDE the Function so post-capture errors
+    // (references to un-stubbed $$WP.* globals like $$WP.Utilities.UI)
+    // don't abort before we can pull the captured data. The MedicationRefill
+    // constructor call runs first; anything that throws after — fine,
+    // we already have the payload.
+    (new Function('try { ' + scriptBody + ' } catch (e) { window.__binaEvalTailError = (e && e.message) || String(e); }'))();
   } catch (e) {
+    // Only true evaluation-level errors (syntax) land here — not runtime.
     return fail('med-eval-failed', {
       message: (e && e.message) || String(e),
     });
   }
-  attempts.push({ step: 'eval-done', elapsedMs: Date.now() - tEval });
+  attempts.push({ step: 'eval-done', elapsedMs: Date.now() - tEval,
+                  tailError: window.__binaEvalTailError || null });
+  try { delete window.__binaEvalTailError; } catch (e) {}
 
   const captured = window.__binaCapturedMedications;
   if (captured == null) return fail('med-data-not-captured');
