@@ -148,6 +148,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               ),
               const PopupMenuItem(value: 'run-full-scrape', child: Text('Run full scrape now')),
               const PopupMenuItem(value: 'refetch-everything', child: Text('Refetch everything (ignore cache)')),
+              const PopupMenuItem(value: 'probe-medications', child: Text('Probe Medications page (15s scout, diagnostic)')),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'toggle-auto-scout',
@@ -675,6 +676,75 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     }
   }
 
+  /// Phase 7 diagnostic — navigate to /signedin/records/medications,
+  /// wait 15 s for the React shell to bootstrap + fire whatever XHRs
+  /// populate the med list, then dump ALL captured XHRs to disk. The
+  /// existing api-capture bootstrap (installed via initialUserScripts)
+  /// is used; we just turn it on for this window.
+  ///
+  /// Output: Documents/portal-probe-medications-<ts>.json
+  ///   { probedAt, finalUrl, xhrCount, xhrs: [...] }
+  ///
+  /// Once we identify the real endpoint from these captures, the
+  /// production fetcher becomes a normal auto-scrape task.
+  Future<void> _probeMedicationsPage() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning || _orchestratorRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _status = 'Med probe: starting capture…';
+    });
+    try {
+      // Turn on api-capture (bootstrap already installed via UserScript).
+      await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.start();');
+      await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.clear && window.__portalScout.clear();');
+
+      // Soft-nav to the Medications page (window.location.href, not loadUrl —
+      // preserves session; same reason we switched in scout v1.8).
+      setState(() => _status = 'Med probe: navigating to /signedin/records/medications…');
+      _navCompleter = Completer<void>();
+      const url = 'https://myhealth.stanfordhealthcare.org/signedin/records/medications';
+      await _ctrl!.evaluateJavascript(source: "window.location.href = '$url';");
+      try {
+        await _navCompleter!.future.timeout(const Duration(seconds: 15));
+      } on TimeoutException {
+        // OK — the snapshot below tells us where we landed.
+      }
+
+      // Wait 15 s for the SPA to fully hydrate + fire its data XHRs.
+      for (int i = 15; i > 0; i--) {
+        if (_abortRequested) break;
+        setState(() => _status = 'Med probe: settling ($i s remaining)…');
+        await Future.delayed(const Duration(seconds: 1));
+      }
+
+      // Drain records.
+      final capsRaw = await _ctrl!.callAsyncJavaScript(functionBody: r'''
+        if (!window.__portalScout) return JSON.stringify({url: location.href, xhrs: []});
+        const records = window.__portalScout.records();
+        return JSON.stringify({url: location.href, xhrs: records});
+      ''');
+      await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
+
+      final payload = jsonDecode((capsRaw?.value ?? capsRaw)?.toString() ?? '{}');
+      final xhrList = (payload['xhrs'] ?? const []) as List;
+      final finalUrl = (payload['url'] ?? '').toString();
+
+      final path = await LocalWriter.writeClinicalList('medications-probe', {
+        'probedAt': DateTime.now().toUtc().toIso8601String(),
+        'finalUrl': finalUrl,
+        'xhrCount': xhrList.length,
+        'xhrs': xhrList,
+      });
+      setState(() => _status = 'Med probe: ${xhrList.length} XHRs captured → $path');
+    } catch (e) {
+      setState(() => _status = 'Med probe failed: $e');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
   /// Fetch Procedures (surgery/allSurgeries) + Appointments
   /// (futureappointments) — both /orion/public/ajax/v1/* JSON endpoints,
   /// cookie-only auth (no CSRF token like the /Clinical/* endpoints
@@ -1146,6 +1216,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _orchestratorAutoRepollTimer?.cancel(); _orchestratorAutoRepollTimer = null;
       _orchestratorRanThisSession = false;
       await _runFullScrapePipeline();
+    } else if (value == 'probe-medications') {
+      await _probeMedicationsPage();
     } else if (value == 'refetch-everything') {
       _orchestratorAutoFireTimer?.cancel();   _orchestratorAutoFireTimer = null;
       _orchestratorAutoRepollTimer?.cancel(); _orchestratorAutoRepollTimer = null;
