@@ -745,6 +745,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       ('Allergies',     'Allergies/LoadListData'),
       ('Immunizations', 'Immunizations/LoadImmunizationsList'),
       ('HealthIssues',  'HealthIssues/LoadListData'),
+      // Phase 7 probe: Medications page is an empty React shell with data
+      // fetched by JS after mount. Scout saw only the HTML (278 KB) but
+      // Stanford's other /Clinical/X sections all use LoadListData —
+      // trying the convention. If this 404s or returns non-JSON, we
+      // fall through to click-scout or HTML parse (Phase 7b).
+      ('Medications',   'Medications/LoadListData'),
     ];
     final results = <String, Map<String, dynamic>>{};
     try {
