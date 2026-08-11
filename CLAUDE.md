@@ -126,7 +126,7 @@ ANTHROPIC_API_KEY     — Required for assistant/analyst
 ANTHROPIC_MODEL       — Default: claude-sonnet-4-6 (chat path; latency-sensitive). Bare alias — do not pin to dated snapshots; they retire on a calendar and return 404.
 ANTHROPIC_MODEL_ANALYST — Default: claude-opus-4-8 (analyst path; reasoning-heavy, latency-tolerant). Falls back to ANTHROPIC_MODEL if unset.
 ASSISTANT_DB          — SQLite path (default: /data/chat.db)
-HAPI_BASE             — FHIR server URL (default: http://hapi:8080/fhir)
+HAPI_BASE             — FHIR server URL (default: http://hapi-v2:8080/fhir)
 OLLAMA_BASE           — Local LLM (default: http://host.docker.internal:11434)
 OLLAMA_MODEL          — Default: mistral
 EPIC_CLIENT_ID        — Epic OAuth (optional)

@@ -5,43 +5,47 @@
 # Usage:
 #   docker compose up -d        # Start all services
 #   docker compose down          # Stop all services
-#   docker compose logs -f hapi  # View HAPI logs
+#   docker compose logs -f hapi-v2  # View HAPI logs
 #
 # Data persists in Docker volumes between restarts.
 # To completely reset: docker compose down -v
+#
+# HISTORY (2026-08-11): the v1 HAPI/Postgres/OpenSearch trio was retired
+# in favor of the v2 stack it had been shadowing for months. Their old
+# `pgdata` / `osdata` volumes (external) are preserved but no longer
+# started — recover from git history if ever needed.
 ###############################################################################
 
 services:
-  # ─── PostgreSQL 16 ────────────────────────────────────────────────────
-  postgres:
+  # ─── PostgreSQL 16 (v2 stack) ─────────────────────────────────────────
+  postgres-v2:
     image: postgres:16-alpine
-    container_name: phv-postgres
+    container_name: phv-postgres-v2
     restart: unless-stopped
     environment:
       POSTGRES_DB: hapi
       POSTGRES_USER: hapi
       POSTGRES_PASSWORD: hapi_phv_2026
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata-v2:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hapi"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ─── OpenSearch 2 (full-text search engine) ───────────────────────────
-  opensearch:
+  # ─── OpenSearch 2 (v2 stack; full-text search engine) ─────────────────
+  opensearch-v2:
     image: opensearchproject/opensearch:2.12.0
-    container_name: phv-opensearch
+    container_name: phv-opensearch-v2
     restart: unless-stopped
     environment:
       - discovery.type=single-node
       - plugins.security.disabled=true
-      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
       - bootstrap.memory_lock=true
-      # Disable the vm.max_map_count check (avoids kernel setting issues on Mac)
       - DISABLE_INSTALL_DEMO_CONFIG=true
       - OPENSEARCH_INITIAL_ADMIN_PASSWORD=ignored
     ulimits:
@@ -52,9 +56,9 @@ services:
         soft: 65536
         hard: 65536
     volumes:
-      - osdata:/usr/share/opensearch/data
+      - osdata-v2:/usr/share/opensearch/data
     ports:
-      - "127.0.0.1:9200:9200"
+      - "127.0.0.1:9201:9200"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
       interval: 15s
@@ -62,25 +66,25 @@ services:
       retries: 10
       start_period: 90s
 
-  # ─── HAPI FHIR R4 Server ─────────────────────────────────────────────
-  hapi:
+  # ─── HAPI FHIR R4 Server (v2 stack) ──────────────────────────────────
+  hapi-v2:
     build:
       context: .
       dockerfile: hapi-config/Dockerfile
-    container_name: phv-hapi-fhir
+    container_name: phv-hapi-fhir-v2
     restart: unless-stopped
     depends_on:
-      postgres:
+      postgres-v2:
         condition: service_healthy
-      opensearch:
+      opensearch-v2:
         condition: service_healthy
     environment:
-      JAVA_TOOL_OPTIONS: "-Xms1g -Xmx4g"
+      JAVA_TOOL_OPTIONS: "-Xms512m -Xmx2g"
       SPRING_CONFIG_LOCATION: "file:///app/config/application.yaml"
     volumes:
-      - ./hapi-config/application.yaml:/app/config/application.yaml:ro
+      - ./hapi-config/application.v2.yaml:/app/config/application.yaml:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8090:8080"
     healthcheck:
       test: ["CMD", "java", "/app/healthcheck.java"]
       interval: 30s
@@ -96,7 +100,7 @@ services:
     container_name: phv-api
     restart: unless-stopped
     depends_on:
-      hapi:
+      hapi-v2:
         condition: service_healthy
     # Load secrets and optional overrides directly from .env. Compose's automatic
     # `.env` interpolation has proved unreliable on this host (some `up -d`
@@ -109,7 +113,7 @@ services:
     env_file:
       - .env
     environment:
-      HAPI_BASE: "http://hapi:8080/fhir"
+      HAPI_BASE: "http://hapi-v2:8080/fhir"
       PHV_LIB: "/app"
       ASSISTANT_DB: "/data/chat.db"
       OLLAMA_BASE: "http://host.docker.internal:11434"
@@ -137,7 +141,7 @@ services:
     container_name: phv-web
     restart: unless-stopped
     depends_on:
-      hapi:
+      hapi-v2:
         condition: service_healthy
       api:
         condition: service_healthy
@@ -146,10 +150,11 @@ services:
       - "127.0.0.1:3080:80"     # HTTP for Cloudflare Tunnel (cloudflared -> localhost:3080)
       - "443:443"               # LAN HTTPS (https://bina.saridium.com from any device on home wifi)
     environment:
-      # Which HAPI host nginx routes /fhir/* to. Default 'hapi' (v1 stack).
-      # docker-compose.app-v2.yml overrides this to 'hapi-v2' so the frontend's
-      # direct /fhir/* calls land on the same dataset the api container sees.
-      HAPI_FHIR_HOST: hapi
+      # nginx routes /fhir/* to this hostname. Kept as an env var (via
+      # envsubst on the template) so the app can be re-pointed without
+      # editing nginx.conf, but the v1/v2 split is over — this is now
+      # just "the HAPI".
+      HAPI_FHIR_HOST: hapi-v2
       # envsubst-on-templates filter: only substitute HAPI_FHIR_HOST, leave
       # nginx's own $host / $remote_addr / etc. references alone.
       NGINX_ENVSUBST_FILTER: "^HAPI_FHIR_HOST$$"
@@ -164,11 +169,9 @@ services:
       - ./data/pillbox/user_photos:/usr/share/pillbox-user-photos:ro   # User-uploaded pill cutouts served at /user-pill-photos/*.png
 
 volumes:
-  pgdata:
-    name: phv-pgdata
-    external: true
-  osdata:
-    name: phv-osdata
-    external: true
+  pgdata-v2:
+    name: phv-pgdata-v2
+  osdata-v2:
+    name: phv-osdata-v2
   aidata:
     name: phv-aidata

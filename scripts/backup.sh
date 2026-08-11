@@ -2,7 +2,7 @@
 # BinaHealth nightly backup runner.
 #
 # What gets backed up (everything truly irreplaceable from the audit):
-#   - HAPI v1 + v2 postgres (logical dumps, portable across HAPI versions)
+#   - HAPI v2 postgres (logical dump, portable across HAPI versions)
 #   - SQLite chat.db (logical dump)
 #   - ~/usarid@gmail.com/Medical/ (raw AHR exports + portal scrape outputs)
 #   - data/pillbox/user_photos/ (user-uploaded photos of actual pills)
@@ -49,12 +49,11 @@ echo "$LOG_PREFIX backup starting"
 STAGE=$(mktemp -d -t binahealth-backup)
 trap 'rm -rf "$STAGE"' EXIT
 
-# Postgres dumps. pg_dumpall captures all databases + roles, portable across
+# Postgres dump. pg_dumpall captures all databases + roles, portable across
 # HAPI/Postgres versions. The docker exec call uses the container's own
-# postgres credentials (no host-side libpq needed).
-echo "$LOG_PREFIX dumping HAPI v1 postgres"
-docker exec -i phv-postgres pg_dumpall -U hapi > "$STAGE/hapi-v1.sql"
-
+# postgres credentials (no host-side libpq needed). The v1 stack was
+# retired 2026-08-11; its last dump lives in restic snapshot d4e69aaa
+# (2026-08-10) if ever needed.
 echo "$LOG_PREFIX dumping HAPI v2 postgres"
 docker exec -i phv-postgres-v2 pg_dumpall -U hapi > "$STAGE/hapi-v2.sql"
 
