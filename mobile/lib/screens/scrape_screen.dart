@@ -655,6 +655,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final portalTag = _portal.name;
     final tasks = <(String, Future<void> Function())>[
       ('Lab bodies ($portalTag)',                     _fetchAllLabBodies),
+      // Message-body fetch reads a discovery file from disk (list of
+      // inbox+outbox message ids), so discovery HAS to run first — on a
+      // fresh install the file doesn't exist and _fetchAllMessageBodies
+      // silently no-ops. Discovery is cheap (~5s) and idempotent.
+      ('Message discovery ($portalTag)',              _discoverMessages),
       ('Message bodies ($portalTag)',                 _fetchAllMessageBodies),
       ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
       ('Orion endpoints (Procedures / Appointments)', _fetchOrionEndpoints),
