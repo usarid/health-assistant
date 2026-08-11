@@ -1658,18 +1658,29 @@ class ScrapeJobs {
 ''';
   }
 
-  /// Stanford Medications — content-negotiated JSON at the same URL that
-  /// serves HTML to browser-native navigations. Key: Accept: */* triggers
-  /// Stanford's React-app JSON response; the WebView-default
-  /// text/html-first Accept triggers the SPA shell. Confirmed via
-  /// DevTools cURL 2026-08-10.
+  /// Stanford Medications — the med data is embedded in the /Clinical/
+  /// Medications HTML as a JavaScript object literal passed to the
+  /// MedicationRefillWorkflowController constructor. Not a JSON API
+  /// (both HTML and Accept:*/* return the same HTML shell). Extraction
+  /// leverages JS's own parser: fetch HTML, find the target <script>
+  /// block, stub the constructor to capture its argument, eval() the
+  /// block, emit the captured object.
   ///
-  /// Auth: cookie-based (_Host-__RequestVerificationToken cookie is
-  /// checked server-side under Sec-Fetch-Site: same-site). No token
-  /// header needed. credentials:'include' sends the cookies.
+  /// Auth: cookie-based CSRF (same as other /myhealth_sso/Clinical/*
+  /// calls). credentials:'include' sends the cookies.
   ///
-  /// Cross-origin (myhealth wrapper → mychart) works the same as our
-  /// lab GetDetails fetch — Stanford CORS allows it.
+  /// Result shape (from DevTools inspection 2026-08-10):
+  ///   { CommunityMembers: [{
+  ///       Organization: { OrganizationName, IsLocal, ... },
+  ///       PrescriptionList: { Prescriptions: [{
+  ///         DateToDisplay,
+  ///         AuthorizingProvider: { Name, ID, ... },
+  ///         OrderingProvider: { Name, ID, ... },
+  ///         Organization: { ... },
+  ///         (+ med name, dose, sig, refill fields — details in
+  ///         real capture)
+  ///       }] }
+  ///     }] }
   ///
   /// Result via callHandler('clinicalList', payload):
   ///   { section, ok, status, list, attempts, timings }
@@ -1706,18 +1717,49 @@ class ScrapeJobs {
 
   if (!resp.ok) return fail('meds-non-ok', { status: resp.status });
 
-  let parsed;
+  // Locate the script block that constructs MedicationRefillWorkflowController.
+  // The block starts with:  var medicationRefillWorkflowController = new $$WP.Clinical....
+  // and contains the med data as the second constructor argument.
+  const m = text.match(/<script[^>]*>[\s\S]*?var\s+medicationRefillWorkflowController[\s\S]*?<\/script>/);
+  if (!m) return fail('med-block-not-found', { htmlLen: text.length });
+  const scriptBody = m[0].replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '');
+  attempts.push({ step: 'script-block-extracted', scriptLen: scriptBody.length });
+
+  // Stub every global the script touches so eval doesn't blow up on
+  // missing DOM / framework symbols. The MedicationRefillWorkflowController
+  // stub captures its second arg — that's the med data payload.
+  const tEval = Date.now();
   try {
-    parsed = JSON.parse(text);
+    window.$$WP = window.$$WP || {};
+    window.$$WP.Clinical = window.$$WP.Clinical || {};
+    window.$$WP.Clinical.Medications = window.$$WP.Clinical.Medications || {};
+    window.$$WP.Clinical.Medications.Controllers = window.$$WP.Clinical.Medications.Controllers || {};
+    window.$$WP.Clinical.Medications.Controllers.MedicationRefillWorkflowController = function (host, data) {
+      window.__binaCapturedMedications = data;
+    };
+    window.$afe = window.$afe || { select: function () { return null; } };
+    // Evaluate the block. new StubFn() returns an empty object; our stub's
+    // side-effect populates window.__binaCapturedMedications with the data.
+    // Use Function constructor rather than raw eval to keep this in a
+    // controlled scope; the script itself is our-own-fetched text so the
+    // trust boundary is the same as any other page-context script.
+    (new Function(scriptBody))();
   } catch (e) {
-    return fail('meds-json-parse-failed', {
+    return fail('med-eval-failed', {
       message: (e && e.message) || String(e),
-      contentType: ct,
-      respPreview: text.slice(0, 400),
     });
   }
+  attempts.push({ step: 'eval-done', elapsedMs: Date.now() - tEval });
 
-  emit({ section, ok: true, status: resp.status, list: parsed, attempts, timings: { totalMs: Date.now() - t0 } });
+  const captured = window.__binaCapturedMedications;
+  if (captured == null) return fail('med-data-not-captured');
+  // Cleanup so we don't leak into subsequent evals
+  try { delete window.__binaCapturedMedications; } catch (e) {}
+
+  emit({
+    section, ok: true, status: resp.status, list: captured,
+    attempts, timings: { totalMs: Date.now() - t0 },
+  });
 })();
 ''';
 
