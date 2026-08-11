@@ -225,11 +225,17 @@ def build_appointment(a):
     status = 'booked'
     if when_iso and when_iso < now:
         status = 'fulfilled'
+    # participants = ONLY the patient + human providers. Department is
+    # NOT a participant (that produced the "Fahed Noel Ayoub, MD,
+    # Otolaryngology Stanford Health Care Emeryville" concatenated
+    # provider-line bug 2026-08-10). Department goes into
+    # serviceProvider/location where the UI reads them separately.
     participants = [{
         'actor': {'reference': STANFORD_PATIENT_REF},
         'status': 'accepted',
         'required': 'required',
     }]
+    dept_name = None
     for pd in (a.get('providerDepartments') or []):
         prov = pd.get('provider') or {}
         dept = pd.get('department') or {}
@@ -239,12 +245,8 @@ def build_appointment(a):
             if npi:
                 actor['identifier'] = {'system': 'http://hl7.org/fhir/sid/us-npi', 'value': npi}
             participants.append({'actor': actor, 'status': 'accepted', 'required': 'required'})
-        if dept.get('name'):
-            participants.append({
-                'actor': {'display': dept['name']},
-                'status': 'accepted',
-                'required': 'required',
-            })
+        if dept.get('name') and not dept_name:
+            dept_name = dept['name']
     r = {
         'resourceType': 'Appointment',
         'id': fhir_id,
@@ -256,16 +258,32 @@ def build_appointment(a):
     if when_iso: r['start'] = when_iso
     if isinstance(duration, int) and duration > 0:
         r['minutesDuration'] = duration
-    # Description from patientInstructions (strip HTML tags for a
-    # readable text field; the full HTML rides along via note.text)
+    # Department name goes to BOTH:
+    #   - .description   — subject-line title (what the UI shows big)
+    #   - .serviceType[0].text — the semantic field for "what service"
+    # Appointment.serviceProvider is NOT an R4 field — I confused it
+    # with Encounter.serviceProvider — HAPI silently dropped it in the
+    # first cut. serviceType is the correct R4 slot and the UI's title-
+    # fallback chain already includes it.
+    if dept_name:
+        r['description'] = dept_name
+        r['serviceType'] = [{'text': dept_name}]
+    # patientInstructions → .patientInstruction (correct FHIR R4 field
+    # for patient-facing instructions; .comment is for internal-use
+    # notes only). UI can render .patientInstruction on demand rather
+    # than in the primary title.
     pi = a.get('patientInstructions')
     if pi:
-        # Some Stanford patientInstructions are strings, some are lists
         raw = pi if isinstance(pi, str) else ' '.join(str(x) for x in pi)
-        # Strip HTML tags — keep it simple
         plain = re.sub(r'<[^>]+>', ' ', raw)
+        plain = re.sub(r'&#39;', "'", plain)
+        plain = re.sub(r'&amp;', '&', plain)
         plain = re.sub(r'\s+', ' ', plain).strip()
-        if plain: r['description'] = plain[:2000]
+        if plain: r['patientInstruction'] = plain[:2000]
+    # Virtual-visit signal: Stanford marks these with mnemonics == "#|V|#".
+    # No standard FHIR flag; record via a Bina tag so UI can style them.
+    if (a.get('mnemonics') or '').strip() == '#|V|#':
+        r['meta']['tag'].append({'system': 'urn:bina:appt-modality', 'code': 'virtual'})
     return r
 
 
