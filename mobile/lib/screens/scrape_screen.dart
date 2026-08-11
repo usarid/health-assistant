@@ -789,6 +789,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         results[section] = result;
         if (result['ok'] == true && result['list'] != null) {
           await LocalWriter.writeClinicalList(section, result['list']);
+        } else {
+          // Persist the failure envelope (error name, HTTP status, attempts)
+          // so we can debug from disk without re-running. Landed at
+          // Documents/clinical/stanford-<section>-failed-<ts>.json.
+          await LocalWriter.writeClinicalList('$section-failed', result);
         }
       }
       final okCount = results.values.where((r) => r['ok'] == true).length;
