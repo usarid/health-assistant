@@ -646,6 +646,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       ('Message bodies (Stanford)',                   _fetchAllMessageBodies),
       ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
       ('Orion endpoints (Procedures / Appointments)', _fetchOrionEndpoints),
+      ('Medications (Stanford)',                      _fetchMedications),
     ];
     int ok = 0, failed = 0;
     try {
@@ -672,6 +673,52 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       }
     } finally {
       setState(() => _orchestratorRunning = false);
+    }
+  }
+
+  /// Fetch Stanford Medications via content-negotiated JSON at the
+  /// /Clinical/Medications URL. Same endpoint that serves HTML to
+  /// browser navigations returns JSON when Accept: */* is sent (Stanford's
+  /// React app takes this branch). Cookie-based CSRF; no token header
+  /// needed. Reuses the 'clinicalList' JS handler bridge.
+  Future<void> _fetchMedications() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _batchTotal = 1;
+      _batchIndex = 1;
+      _status = 'Medications: fetching…';
+    });
+    try {
+      _clinicalListCompleter = Completer<Map<String, dynamic>>();
+      try {
+        await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordMedicationsFetch());
+      } catch (e) {
+        setState(() => _status = 'Medications: inject failed: $e');
+        return;
+      }
+      Map<String, dynamic> result;
+      try {
+        result = await _clinicalListCompleter!.future
+            .timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        setState(() => _status = 'Medications: timeout (30s)');
+        return;
+      }
+      if (result['ok'] == true && result['list'] != null) {
+        final path = await LocalWriter.writeClinicalList('Medications', result['list']);
+        setState(() => _status = 'Medications: OK → $path');
+      } else {
+        // Persist failure envelope for diagnostics.
+        await LocalWriter.writeClinicalList('Medications-failed', result);
+        setState(() => _status = 'Medications: failed (${result['error'] ?? 'unknown'})');
+      }
+    } catch (e) {
+      setState(() => _status = 'Medications: exception: $e');
+    } finally {
+      setState(() => _batchRunning = false);
     }
   }
 

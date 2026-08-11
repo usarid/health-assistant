@@ -1658,6 +1658,69 @@ class ScrapeJobs {
 ''';
   }
 
+  /// Stanford Medications — content-negotiated JSON at the same URL that
+  /// serves HTML to browser-native navigations. Key: Accept: */* triggers
+  /// Stanford's React-app JSON response; the WebView-default
+  /// text/html-first Accept triggers the SPA shell. Confirmed via
+  /// DevTools cURL 2026-08-10.
+  ///
+  /// Auth: cookie-based (_Host-__RequestVerificationToken cookie is
+  /// checked server-side under Sec-Fetch-Site: same-site). No token
+  /// header needed. credentials:'include' sends the cookies.
+  ///
+  /// Cross-origin (myhealth wrapper → mychart) works the same as our
+  /// lab GetDetails fetch — Stanford CORS allows it.
+  ///
+  /// Result via callHandler('clinicalList', payload):
+  ///   { section, ok, status, list, attempts, timings }
+  static String stanfordMedicationsFetch() => r'''
+(async () => {
+  const section = 'Medications';
+  const t0 = Date.now();
+  const attempts = [];
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('clinicalList', payload);
+    }
+  }
+  function fail(error, extra) {
+    emit({ section, ok: false, error, attempts, timings: { totalMs: Date.now() - t0 }, ...(extra || {}) });
+  }
+
+  const url = 'https://mychart.stanfordhealthcare.org/myhealth_sso/Clinical/Medications?lang=en-US';
+  const tCall = Date.now();
+  let resp;
+  try {
+    resp = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'Accept': '*/*' },
+    });
+  } catch (e) {
+    return fail('meds-fetch-failed', { message: (e && e.message) || String(e) });
+  }
+  const text = await resp.text();
+  const ct = resp.headers.get('content-type') || '';
+  attempts.push({ step: 'medications', url, status: resp.status, ok: resp.ok, contentType: ct, respLength: text.length, elapsedMs: Date.now() - tCall });
+
+  if (!resp.ok) return fail('meds-non-ok', { status: resp.status });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    return fail('meds-json-parse-failed', {
+      message: (e && e.message) || String(e),
+      contentType: ct,
+      respPreview: text.slice(0, 400),
+    });
+  }
+
+  emit({ section, ok: true, status: resp.status, list: parsed, attempts, timings: { totalMs: Date.now() - t0 } });
+})();
+''';
+
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
   static String loginAutofillAndCapture({
     String? autofillEmail,
