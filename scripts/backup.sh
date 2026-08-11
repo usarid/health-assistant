@@ -19,6 +19,14 @@
 
 set -euo pipefail
 
+# launchd runs with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
+# includes neither Homebrew nor Docker Desktop. Prepending both keeps the
+# script runnable from any low-PATH context (launchd, systemd, cron, an
+# empty ssh session) without changing behaviour when run from a normal
+# shell that already has these on PATH. Broke silently 2026-06-09 →
+# 2026-08-10 (exit 127, docker: command not found).
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH"
+
 ENV_FILE="$HOME/.binahealth-backup-env"
 if [ ! -f "$ENV_FILE" ]; then
     echo "ERROR: $ENV_FILE not found. Copy scripts/backup-env.example, fill in values, chmod 600." >&2
