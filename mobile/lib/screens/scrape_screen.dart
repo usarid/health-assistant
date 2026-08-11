@@ -41,7 +41,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   /// still refers to Stanford hostnames inline (R-2 territory).
   PortalConfig get _portal => PortalRegistry.instance.active;
 
-  String _status = 'Log into Stanford MyHealth';
+  String _status = 'Log into ${PortalRegistry.instance.active.name}';
   String _currentUrl = '';
   bool _onSignedInPage = false;
   bool _batchRunning = false;
@@ -137,14 +137,14 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               ),
               const PopupMenuItem(value: 'retry-failures', child: Text('Retry failed visits')),
               const PopupMenuDivider(),
-              const PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (Stanford)')),
+              PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (${_portal.name})')),
               const PopupMenuItem(value: 'test-fetch-one-message', child: Text('Test: fetch one message body')),
-              const PopupMenuItem(value: 'fetch-all-message-bodies', child: Text('Fetch all message bodies (Stanford)')),
+              PopupMenuItem(value: 'fetch-all-message-bodies', child: Text('Fetch all message bodies (${_portal.name})')),
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'test-fetch-one-lab', child: Text('Test: fetch one lab body')),
-              const PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (Stanford)')),
+              PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (${_portal.name})')),
               const PopupMenuDivider(),
-              const PopupMenuItem(value: 'fetch-clinical-triad', child: Text('Fetch Allergies/Immunizations/Conditions (Stanford)')),
+              PopupMenuItem(value: 'fetch-clinical-triad', child: Text('Fetch Allergies/Immunizations/Conditions (${_portal.name})')),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'toggle-auto-orchestrate',
@@ -647,12 +647,13 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _abortRequested = false;
       _status = 'Auto-scrape: starting…';
     });
+    final portalTag = _portal.name;
     final tasks = <(String, Future<void> Function())>[
-      ('Lab bodies (Stanford)',                       _fetchAllLabBodies),
-      ('Message bodies (Stanford)',                   _fetchAllMessageBodies),
+      ('Lab bodies ($portalTag)',                     _fetchAllLabBodies),
+      ('Message bodies ($portalTag)',                 _fetchAllMessageBodies),
       ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
       ('Orion endpoints (Procedures / Appointments)', _fetchOrionEndpoints),
-      ('Medications (Stanford)',                      _fetchMedications),
+      ('Medications ($portalTag)',                    _fetchMedications),
     ];
     int ok = 0, failed = 0;
     try {
@@ -761,8 +762,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         _clinicalListCompleter = Completer<Map<String, dynamic>>();
         try {
           await _ctrl!.evaluateJavascript(
-            source: ScrapeJobs.stanfordOrionFetch(
-              section: section, urlPath: path, method: method, jsonBody: body),
+            source: ScrapeJobs.epicOrionFetch(
+              portal: _portal, section: section, urlPath: path, method: method, jsonBody: body),
           );
         } catch (e) {
           continue;
@@ -822,8 +823,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         _clinicalListCompleter = Completer<Map<String, dynamic>>();
         try {
           await _ctrl!.evaluateJavascript(
-            source: ScrapeJobs.stanfordClinicalLoadList(
-              section: section, endpointPath: endpointPath),
+            source: ScrapeJobs.epicClinicalLoadList(
+              portal: _portal, section: section, endpointPath: endpointPath),
           );
         } catch (e) {
           results[section] = {'ok': false, 'error': 'inject-failed:$e'};
@@ -1100,7 +1101,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       // 4. Stop capture + write the spec.
       await _ctrl!.evaluateJavascript(source: 'window.__portalScout && window.__portalScout.stop();');
       final spec = {
-        'portal': 'stanford',
+        'portal': _portal.id,
         'scoutVersion': 'v1.12-2026-06-25',
         'startedAt': _batchStartedAt!.toUtc().toIso8601String(),
         'finishedAt': DateTime.now().toUtc().toIso8601String(),
@@ -1139,20 +1140,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
   Future<void> _onMenuSelected(String value) async {
     if (value == 'forget-login') {
-      final exists = await CredentialsStore.has('stanford');
+      final portalId = _portal.id;
+      final portalName = _portal.name;
+      final exists = await CredentialsStore.has(portalId);
       if (!exists) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No saved Stanford login on this device.'),
-          duration: Duration(seconds: 3),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('No saved $portalName login on this device.'),
+          duration: const Duration(seconds: 3),
         ));
         return;
       }
-      await CredentialsStore.clear('stanford');
+      await CredentialsStore.clear(portalId);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Saved Stanford login cleared from this device.'),
-        duration: Duration(seconds: 3),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Saved $portalName login cleared from this device.'),
+        duration: const Duration(seconds: 3),
       ));
     } else if (value == 'toggle-diagnostics') {
       setState(() {
@@ -1260,7 +1263,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       return {'ok': false};
     }
     final m = Map<String, dynamic>.from(args.first as Map);
-    final portal = (m['portal'] ?? 'stanford').toString();
+    final portal = (m['portal'] ?? _portal.id).toString();
     final email = (m['email'] ?? '').toString();
     final password = (m['password'] ?? '').toString();
     final wasAutofilled = m['wasAutofilled'] == true;
@@ -1291,7 +1294,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       context: context,
       barrierDismissible: false,
       builder: (dialogCtx) => AlertDialog(
-        title: const Text('Save Stanford login?'),
+        title: Text('Save ${_portal.name} login?'),
         content: const Text(
           'Store the email + password on this device (iOS Keychain) so '
           'next time you can skip typing them.\n\n'
@@ -1338,9 +1341,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Future<void> _wireLoginPageIfPresent() async {
     final ctrl = _ctrl;
     if (ctrl == null) return;
-    const portal = 'stanford';
-    final cred = await CredentialsStore.read(portal);
+    final portalId = _portal.id;
+    final cred = await CredentialsStore.read(portalId);
     final js = ScrapeJobs.loginAutofillAndCapture(
+      portalId: portalId,
       autofillEmail: cred?.email,
       autofillPassword: cred?.password,
     );
@@ -1534,7 +1538,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
     _scrapeCompleter = Completer<Map<String, dynamic>>();
     try {
-      await _ctrl!.evaluateJavascript(source: ScrapeJobs.stanfordSingleNote(pollMs: pollMs));
+      await _ctrl!.evaluateJavascript(source: ScrapeJobs.epicSingleNote(pollMs: pollMs));
     } catch (e) {
       return {'error': 'inject-failed: $e'};
     }
@@ -1704,7 +1708,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _messageDetailCompleter = Completer<Map<String, dynamic>>();
       try {
         await _ctrl!.evaluateJavascript(
-          source: ScrapeJobs.stanfordMessageDetail(folder: folder, messageId: id),
+          source: ScrapeJobs.epicMessageDetail(folder: folder, messageId: id),
         );
       } catch (e) {
         setState(() => _status = 'Inject failed: $e');
@@ -1752,7 +1756,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _labDetailCompleter = Completer<Map<String, dynamic>>();
       try {
         await _ctrl!.evaluateJavascript(
-          source: ScrapeJobs.stanfordLabDetail(eorderid: eorderid),
+          source: ScrapeJobs.epicLabDetail(portal: _portal, eorderid: eorderid),
         );
       } catch (e) {
         setState(() => _status = 'Inject failed: $e');
@@ -1781,7 +1785,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
   /// Iterate every eorderid in the bundled stanford-lab-orders.json asset
   /// and fetch its GetDetails JSON from mychart.stanfordhealthcare.org via
-  /// the reverse-engineered two-step API flow (see ScrapeJobs.stanfordLabDetail).
+  /// the reverse-engineered two-step API flow (see ScrapeJobs.epicLabDetail).
   /// Per-result JSON files written immediately (crash-safe); consolidated
   /// batch index at end.
   Future<void> _fetchAllLabBodies() async {
@@ -1831,7 +1835,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         _labDetailCompleter = Completer<Map<String, dynamic>>();
         try {
           await _ctrl!.evaluateJavascript(
-            source: ScrapeJobs.stanfordLabDetail(eorderid: eorderid),
+            source: ScrapeJobs.epicLabDetail(portal: _portal, eorderid: eorderid),
           );
         } catch (e) {
           errors.add({'eorderid': eorderid, 'reason': 'inject-failed:$e'});
@@ -1964,7 +1968,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         _messageDetailCompleter = Completer<Map<String, dynamic>>();
         try {
           await _ctrl!.evaluateJavascript(
-            source: ScrapeJobs.stanfordMessageDetail(folder: folder, messageId: id),
+            source: ScrapeJobs.epicMessageDetail(folder: folder, messageId: id),
           );
         } catch (e) {
           errors.add({'folder': folder, 'id': id, 'reason': 'inject-failed:$e'});
@@ -2063,7 +2067,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     _messageListCompleter = Completer<Map<String, dynamic>>();
     try {
       await _ctrl!.evaluateJavascript(
-          source: ScrapeJobs.stanfordMessageList(cursor: cursor));
+          source: ScrapeJobs.epicMessageList(cursor: cursor));
     } catch (e) {
       return {
         'dartTimings': {...phases, 'totalMs': stopwatch.elapsedMilliseconds},

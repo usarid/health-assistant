@@ -66,6 +66,12 @@ class PortalHosts {
         wrapper: m['wrapper'] as String?,
         api: m['api'] as String,
       );
+
+  /// The origin where session cookies live and where user-facing pages
+  /// are served. Equals `wrapper` when the portal splits SPA and API
+  /// across two origins (e.g. Stanford: myhealth.* vs mychart.*), and
+  /// falls back to `api` for single-origin portals (e.g. UCSF).
+  String get userFacing => wrapper ?? api;
 }
 
 class PortalAuth {

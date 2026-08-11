@@ -1,7 +1,28 @@
+import '../portal/portal_registry.dart';
+
 /// JS scripts the host injects into the WebView per scrape job.
+///
+/// Job methods that operate on Epic MyChart data (labs, messages,
+/// clinical triad, visits/notes, appointments, procedures, medications)
+/// are named `epicXxx` and take a `PortalConfig portal` argument. The
+/// portal supplies host/base-path/CSRF-name values that vary between
+/// Epic instances; the meaty scrape logic stays in this file.
+///
+/// The remaining `stanfordXxx` methods are Stanford-specific quirks
+/// (e.g. medications extraction via embedded JS object literal — a
+/// pattern only found on Stanford so far). These stay portal-tagged;
+/// UCSF will add its own quirk methods when/if similar oddities emerge.
 class ScrapeJobs {
-  /// Per-visit Stanford scrape. Runs on a
-  /// /signedin/appointments/after-visit-summary/csn=X&encType=3 page.
+  /// Wrap a Dart string as a single-quoted JS string literal, escaping
+  /// backslashes and single-quotes. Used to interpolate portal-config
+  /// values into the JS payloads below without shell-injection risk.
+  static String _jsString(String s) =>
+      "'${s.replaceAll(r'\', r'\\').replaceAll("'", r"\'")}'";
+
+  /// Per-visit Epic-MyChart note scrape. Runs on the visit's
+  /// after-visit-summary page (URL template lives in
+  /// `portal.urls.visitDetailPattern`; orchestrator navigates there
+  /// before injecting this).
   ///
   /// Two layouts in the wild:
   ///   - **Inline view**: Clinical Notes tab opens to a single rendered note
@@ -14,10 +35,15 @@ class ScrapeJobs {
   ///     (capture=0 on 9/106 visits in 2026-06-13 run). New code path:
   ///     iterate buttons, click → wait for body → capture → back → repeat.
   ///
+  /// Portal-agnostic: operates on the currently-loaded DOM only; the
+  /// selectors (`.pgSection`, "VIEW NOTE" button copy) are Epic-standard
+  /// across MyChart instances. If a future portal needs different
+  /// selectors, add them to PortalConfig and interpolate here.
+  ///
   /// Sends to Dart via callHandler('saveNote', payload):
   ///   - single-note: { csn, html, error? }
   ///   - multi-note:  { csn, html: '', notes: [{label, html}, ...] }
-  static String stanfordSingleNote({int pollMs = 15000}) {
+  static String epicSingleNote({int pollMs = 15000}) {
     return '''
 (async () => {
   function send(payload) {
@@ -337,10 +363,15 @@ class ScrapeJobs {
   /// Robust to either `<tr>` table rows or `<li>` list rows — selectors
   /// fall back across both. Polls for up to 8s for rows to appear (Epic
   /// SPA mount latency).
-  /// [cursor] is Stanford's `nextPageBeginMessageId` from a prior page's
+  /// [cursor] is Epic's `nextPageBeginMessageId` from a prior page's
   /// response — pass it on subsequent pages to get the next slice via
   /// cursor-based pagination. Null/omitted on the first page.
-  static String stanfordMessageList({String? cursor}) {
+  ///
+  /// Portal-agnostic: all fetches in the JS body are relative (`/Private/
+  /// Ajax/V1/Mailbox/Page` etc.), so they resolve against the WebView's
+  /// current origin. Correctness depends on the orchestrator having
+  /// navigated to `portal.urls.messageInbox` / `.messageOutbox` first.
+  static String epicMessageList({String? cursor}) {
     final cursorJs = cursor == null
         ? 'null'
         : "'${cursor.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
@@ -1160,23 +1191,26 @@ class ScrapeJobs {
 ''';
   }
 
-  /// Fetch one Stanford message's full body via the JSON API.
+  /// Fetch one Epic message's full body via the JSON API.
   ///
-  /// Mirrors the stanfordMessageList architecture:
+  /// Mirrors the epicMessageList architecture:
   ///   - Hook XHR for body capture (diagnostic)
   ///   - POST to a candidate endpoint with {payload: messageId}
   ///   - On 0-row / non-2xx failure, grep the SPA's JS bundles for the
   ///     real endpoint path
   ///
   /// Caller passes the [folder] ('inbox' or 'outbox') and the message
-  /// [messageId] (Stanford's numeric string ID from the discovery list).
+  /// [messageId] (Epic's numeric string ID from the discovery list).
   ///
   /// Result via callHandler('messageDetail', payload):
   ///   { folder, id, ok, status, data, attempts, jsGrepHits?, error?, timings }
   /// 'data' is the parsed JSON response from the working endpoint —
   /// the body content + thread chain + metadata. PHI-bearing; stays
   /// local on disk only.
-  static String stanfordMessageDetail({
+  ///
+  /// Portal-agnostic like epicMessageList — relative-URL fetches inherit
+  /// the WebView's origin.
+  static String epicMessageDetail({
     required String folder,
     required String messageId,
   }) {
@@ -1389,11 +1423,24 @@ class ScrapeJobs {
   /// Result via callHandler('labDetail', payload):
   ///   { eorderid, ok, status, details, error?, attempts, timings }
   /// where `details` is the parsed GetDetails JSON.
-  static String stanfordLabDetail({required String eorderid}) {
-    final eorderidJs = "'${eorderid.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+  static String epicLabDetail({
+    required PortalConfig portal,
+    required String eorderid,
+  }) {
+    final eorderidJs    = _jsString(eorderid);
+    final apiHostJs     = _jsString(portal.hosts.api);
+    final basePathJs    = _jsString(portal.basePath);
+    final csrfInputJs   = _jsString(portal.auth.csrfInputName);
+    final csrfHeaderJs  = _jsString(portal.auth.csrfHeaderName);
+    final tokenCacheKey = _jsString('__binaRVT_${portal.id}');
     return '''
 (async () => {
-  const eorderid = $eorderidJs;
+  const eorderid     = $eorderidJs;
+  const API_HOST     = $apiHostJs;
+  const BASE_PATH    = $basePathJs;
+  const CSRF_INPUT   = $csrfInputJs;
+  const CSRF_HEADER  = $csrfHeaderJs;
+  const TOKEN_CACHE  = $tokenCacheKey;
   const t0 = Date.now();
   const attempts = [];
 
@@ -1412,18 +1459,18 @@ class ScrapeJobs {
   }
 
   // Step 1 — ensure verification token. Cache on window for the WebView session.
-  const TOKEN_CACHE = '__binaStanfordRVT';
   let token = window[TOKEN_CACHE];
   if (!token) {
     const tT = Date.now();
-    const shellUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/app/test-results/details'
+    const shellUrl = 'https://' + API_HOST + BASE_PATH + '/app/test-results/details'
       + '?lang=en-US&eorderid=' + encodeURIComponent(eorderid);
     try {
       const shellResp = await fetch(shellUrl, { credentials: 'include', headers: { 'Accept': 'text/html' } });
       const shellHtml = await shellResp.text();
       attempts.push({ step: 'shell-fetch', url: shellUrl, status: shellResp.status, htmlLength: shellHtml.length, elapsedMs: Date.now() - tT });
       if (!shellResp.ok) return fail('shell-non-ok', { status: shellResp.status });
-      const m = shellHtml.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+      const tokenRegex = new RegExp('name="' + CSRF_INPUT + '"[^>]*value="([^"]+)"');
+      const m = shellHtml.match(tokenRegex);
       if (!m) return fail('token-not-found-in-shell');
       token = m[1];
       window[TOKEN_CACHE] = token;
@@ -1437,18 +1484,19 @@ class ScrapeJobs {
   // Step 2 — POST GetDetails. orderKey = URL-decoded eorderid.
   const orderKey = decodeURIComponent(eorderid);
   const tD = Date.now();
-  const apiUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/api/test-results/GetDetails';
+  const apiUrl = 'https://' + API_HOST + BASE_PATH + '/api/test-results/GetDetails';
   const body = JSON.stringify({ orderKey, organizationID: '', PageNonce: randomHex(32) });
   let detailsResp, details;
   try {
+    const headers = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    };
+    headers[CSRF_HEADER] = token;
     detailsResp = await fetch(apiUrl, {
       method: 'POST',
       credentials: 'include',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        '__RequestVerificationToken': token,
-      },
+      headers: headers,
       body,
     });
   } catch (e) {
@@ -1478,34 +1526,47 @@ class ScrapeJobs {
 ''';
   }
 
-  /// Generic Stanford "Clinical/<Section>/Load<Action>" list fetcher.
-  /// Same auth pattern as [stanfordLabDetail] — reuses the cached
-  /// __binaStanfordRVT verification token. POSTs to the section's
-  /// endpoint with an empty body and returns the parsed JSON.
+  /// Generic Epic MyChart "Clinical/<Section>/Load<Action>" list fetcher.
+  /// Two-step: (1) scrape the anti-CSRF token from a shell HTML page,
+  /// (2) POST the section's LoadListData endpoint with the token echoed
+  /// back in the header the portal expects. Token is cached on a
+  /// per-portal window global across calls.
   ///
-  /// Endpoint discovery: tools/portal-scout/specs/stanford-v1.json,
-  /// derived from the v1.12 scout's 17 MB capture. Same shape works
-  /// for Allergies/HealthIssues/Immunizations (and likely others).
+  /// Portal-parameterized: reads API host, base path, and CSRF field
+  /// names from `portal`. Pattern proven against Stanford Allergies /
+  /// HealthIssues / Immunizations; expected to work on any Epic MyChart
+  /// instance (all use the same /Clinical/* section shape).
   ///
   /// Result via callHandler('clinicalList', payload):
   ///   { section, ok, status, list, error?, attempts, timings }
-  static String stanfordClinicalLoadList({
+  static String epicClinicalLoadList({
+    required PortalConfig portal,
     required String section,        // e.g. 'Allergies'
     required String endpointPath,   // e.g. 'Allergies/LoadListData'
     Map<String, String>? extraQuery,
   }) {
-    final sectionJs   = "'${section.replaceAll("'", r"\'")}'";
-    final endpointJs  = "'${endpointPath.replaceAll("'", r"\'")}'";
+    final sectionJs      = _jsString(section);
+    final endpointJs     = _jsString(endpointPath);
+    final apiHostJs      = _jsString(portal.hosts.api);
+    final basePathJs     = _jsString(portal.basePath);
+    final csrfInputJs    = _jsString(portal.auth.csrfInputName);
+    final csrfHeaderJs   = _jsString(portal.auth.csrfHeaderName);
+    final tokenCacheKey  = _jsString('__binaRVT_${portal.id}');
     final qsEntries = (extraQuery ?? const {'ComponentNumber': '2', 'lang': 'en-US'})
         .entries
         .map((e) => '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
         .join('&');
-    final qsJs = "'$qsEntries'";
+    final qsJs = _jsString(qsEntries);
     return '''
 (async () => {
   const section      = $sectionJs;
   const endpointPath = $endpointJs;
   const qs           = $qsJs;
+  const API_HOST     = $apiHostJs;
+  const BASE_PATH    = $basePathJs;
+  const CSRF_INPUT   = $csrfInputJs;
+  const CSRF_HEADER  = $csrfHeaderJs;
+  const TOKEN_CACHE  = $tokenCacheKey;
   const t0 = Date.now();
   const attempts = [];
 
@@ -1519,18 +1580,18 @@ class ScrapeJobs {
   }
 
   // Step 1 — ensure verification token. Cached on window across calls.
-  const TOKEN_CACHE = '__binaStanfordRVT';
   let token = window[TOKEN_CACHE];
   if (!token) {
     const tT = Date.now();
-    // Any /myhealth_sso/app/* shell page has the __CSRFContainer hidden input.
-    const shellUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/Clinical/Allergies/Index?lang=en-US';
+    // Any /<basePath>/Clinical/*/Index page carries the hidden token input.
+    const shellUrl = 'https://' + API_HOST + BASE_PATH + '/Clinical/Allergies/Index?lang=en-US';
     try {
       const shellResp = await fetch(shellUrl, { credentials: 'include', headers: { 'Accept': 'text/html' } });
       const shellHtml = await shellResp.text();
       attempts.push({ step: 'shell-fetch', status: shellResp.status, htmlLength: shellHtml.length, elapsedMs: Date.now() - tT });
       if (!shellResp.ok) return fail('shell-non-ok', { status: shellResp.status });
-      const m = shellHtml.match(/name="__RequestVerificationToken"[^>]*value="([^"]+)"/);
+      const tokenRegex = new RegExp('name="' + CSRF_INPUT + '"[^>]*value="([^"]+)"');
+      const m = shellHtml.match(tokenRegex);
       if (!m) return fail('token-not-found-in-shell');
       token = m[1];
       window[TOKEN_CACHE] = token;
@@ -1543,18 +1604,19 @@ class ScrapeJobs {
 
   // Step 2 — POST the section's LoadListData (or equivalent) endpoint.
   const tL = Date.now();
-  const apiUrl = 'https://mychart.stanfordhealthcare.org/myhealth_sso/Clinical/' + endpointPath
+  const apiUrl = 'https://' + API_HOST + BASE_PATH + '/Clinical/' + endpointPath
     + (qs ? ('?' + qs) : '');
   let listResp;
   try {
+    const headers = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+    };
+    headers[CSRF_HEADER] = token;
     listResp = await fetch(apiUrl, {
       method: 'POST',
       credentials: 'include',
-      headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-        '__RequestVerificationToken': token,
-      },
+      headers: headers,
       body: '',
     });
   } catch (e) {
@@ -1581,36 +1643,42 @@ class ScrapeJobs {
 ''';
   }
 
-  /// Generic Stanford orion/* fetcher — cookies-only auth (no CSRF
-  /// token required, unlike the /Clinical/* family). Captures the
-  /// JSON response and emits via `clinicalList` handler so the same
+  /// Generic Epic orion/* fetcher — cookies-only auth (no CSRF token
+  /// required, unlike the /Clinical/* family). Captures the JSON
+  /// response and emits via `clinicalList` handler so the same
   /// Dart-side completer wiring works for the orchestrator. Supports
   /// GET (default) and POST with an optional JSON body.
   ///
-  /// Endpoint discovery: tools/portal-scout/specs/stanford-v1.json.
-  /// Used for:
+  /// "orion" is an Epic patient-facing sub-app; portals that enable it
+  /// expose paths under `/orion/public/ajax/v1/*`. Not every Epic
+  /// instance has orion — check portal-scout output. Stanford's
+  /// enabled endpoints:
   ///   - Procedures: POST /orion/public/ajax/v1/surgery/allSurgeries
   ///     with body {"numOfDays":N}
   ///   - Appointments: GET /orion/public/ajax/v1/appointments/futureappointments
   ///   - Care Resources, Orders & Referrals, etc.
-  static String stanfordOrionFetch({
+  ///
+  /// Fetches go to `portal.hosts.userFacing` — the session-cookie
+  /// origin (wrapper for split-origin portals, api for single-origin).
+  static String epicOrionFetch({
+    required PortalConfig portal,
     required String section,        // friendly label, e.g. 'Procedures'
     required String urlPath,        // e.g. '/orion/public/ajax/v1/surgery/allSurgeries'
     String method = 'GET',
     String? jsonBody,
   }) {
-    final sectionJs = "'${section.replaceAll("'", r"\'")}'";
-    final pathJs    = "'${urlPath.replaceAll("'", r"\'")}'";
-    final methodJs  = "'${method.toUpperCase()}'";
-    final bodyJs    = jsonBody == null
-        ? 'null'
-        : "'${jsonBody.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    final sectionJs   = _jsString(section);
+    final pathJs      = _jsString(urlPath);
+    final methodJs    = _jsString(method.toUpperCase());
+    final userHostJs  = _jsString(portal.hosts.userFacing);
+    final bodyJs      = jsonBody == null ? 'null' : _jsString(jsonBody);
     return '''
 (async () => {
   const section = $sectionJs;
   const path    = $pathJs;
   const method  = $methodJs;
   const body    = $bodyJs;
+  const USER_HOST = $userHostJs;
   const t0 = Date.now();
   const attempts = [];
 
@@ -1623,7 +1691,7 @@ class ScrapeJobs {
     emit({ section, ok: false, error, attempts, timings: { totalMs: Date.now() - t0 }, ...(extra || {}) });
   }
 
-  const url = 'https://myhealth.stanfordhealthcare.org' + path;
+  const url = 'https://' + USER_HOST + path;
   const init = {
     method,
     credentials: 'include',
@@ -1658,13 +1726,19 @@ class ScrapeJobs {
 ''';
   }
 
-  /// Stanford Medications — the med data is embedded in the /Clinical/
-  /// Medications HTML as a JavaScript object literal passed to the
-  /// MedicationRefillWorkflowController constructor. Not a JSON API
-  /// (both HTML and Accept:*/* return the same HTML shell). Extraction
-  /// leverages JS's own parser: fetch HTML, find the target <script>
-  /// block, stub the constructor to capture its argument, eval() the
-  /// block, emit the captured object.
+  /// Stanford Medications — STANFORD-ONLY quirk. The med data is
+  /// embedded in Stanford's /Clinical/Medications HTML as a JavaScript
+  /// object literal passed to the MedicationRefillWorkflowController
+  /// constructor (a Stanford-specific class name, not Epic-standard).
+  /// Not a JSON API (both HTML and Accept:*/* return the same HTML
+  /// shell). Extraction leverages JS's own parser: fetch HTML, find the
+  /// target <script> block, stub the constructor to capture its
+  /// argument, eval() the block, emit the captured object.
+  ///
+  /// Kept as a stanfordXxx method rather than migrated to epicXxx —
+  /// no evidence yet that any other Epic instance uses this shape.
+  /// R-4 will add a portal.enabledQuirks list so the orchestrator
+  /// gates whether to call this per portal.
   ///
   /// Auth: cookie-based CSRF (same as other /myhealth_sso/Clinical/*
   /// calls). credentials:'include' sends the cookies.
@@ -1777,20 +1851,23 @@ class ScrapeJobs {
 ''';
 
   /// Idempotent — re-injecting on a page that's already wired is a no-op.
+  ///
+  /// [portalId] is stamped into `capturedCredentials.portal` so the Dart
+  /// side stores creds under the right portal slug — was hardcoded to
+  /// 'stanford' before R-2.
   static String loginAutofillAndCapture({
+    required String portalId,
     String? autofillEmail,
     String? autofillPassword,
   }) {
-    final emailJs = autofillEmail == null
-        ? 'null'
-        : "'${autofillEmail.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
-    final passwordJs = autofillPassword == null
-        ? 'null'
-        : "'${autofillPassword.replaceAll(r"\", r"\\").replaceAll("'", r"\'")}'";
+    final portalIdJs = _jsString(portalId);
+    final emailJs = autofillEmail == null ? 'null' : _jsString(autofillEmail);
+    final passwordJs = autofillPassword == null ? 'null' : _jsString(autofillPassword);
     return '''
 (() => {
   if (window.__binaLoginWired) return 'already-wired';
 
+  const portalId = $portalIdJs;
   const autofillEmail = $emailJs;
   const autofillPassword = $passwordJs;
 
@@ -1864,7 +1941,7 @@ class ScrapeJobs {
       });
       if (!emailVal || !passwordVal) return;
       emit('capturedCredentials', {
-        portal: 'stanford',
+        portal: portalId,
         email: emailVal,
         password: passwordVal,
         wasAutofilled: emailVal === autofillEmail,
