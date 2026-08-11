@@ -7,8 +7,8 @@
 - Counts are point-in-time. Re-run the counts block (see Appendix) and bump "Last counts taken" whenever you update the matrix. Don't chase small drift.
 - Status changes get a one-line entry in the changelog at the bottom — keeps the history without bloating the matrix.
 
-**Last counts taken:** 2026-06-25 post-clinical-triad ingest (HAPI on localhost:8090).
-**Coverage matrix version:** 4.
+**Last counts taken:** 2026-08-10 post-orion-triad ingest (HAPI on localhost:8090).
+**Coverage matrix version:** 5.
 
 ---
 
@@ -42,9 +42,9 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 | Patient | mixed | ✅ | n/a | 16 ✅ | ✅ Profile | ✅ | **Reorganized 2026-06-23**: `Patient/bina-user-urisarid` is the canonical Bina anchor with `link[seealso]` to 15 sub-identity Patients (one per data source). Sub-identities: 4 institutional (stanford/ucsf/mayo/mskcc), 1 affiliate (sutter), 4 vendors (labcorp/doctorsdata/sibocenter/genova), 1 EHR-unknown (cerner), 3 Apple (wearable/health-records), 2 misc (historical-import/unknown-oid/untagged). |
 | Practitioner | — | ❌ | ❌ | 0 | ❌ | ❌ | Senders/recipients carried as `.display` only; no first-class Practitioner records. Low priority. |
 | Encounter (past visits) | Stanford, MSKCC, UCSF | ✅ | ✅ via mobile per-visit notes | 543 | ✅ Home / appointment details | ✅ | Stable. |
-| Appointment (future visits) | Stanford | 🟡 some in Home tab | n/a | **0** ❌ | ✅ rendered from `api/profile` | ⚠️ | Surfaced in UI but not stored as FHIR Appointment resources. Inconsistency worth fixing. |
+| Appointment (future visits) | Stanford native | ✅ | ✅ | **4** | ✅ Home tab + FHIR | ✅ | **Phase 6a Stanford appointment scrape shipped (2026-08-10)** via `GET /orion/public/ajax/v1/appointments/futureappointments`. 4 upcoming appointments with provider (NPI), department (address), patientInstructions. First Appointment resources in HAPI. |
 | Condition (problem list) | mixed + Stanford native | ✅ | ✅ | 79 | ✅ Profile | ✅ | **Phase 5 Stanford native scrape shipped (2026-06-25)** via `POST /myhealth_sso/Clinical/HealthIssues/LoadListData`. +14 from Stanford; pre-existing 65 across other sources. |
-| Procedure | mixed | 🟡 | ❌ for non-trivial ones | **59** ❌ | ✅ list only | 🟡 list only | **Gap.** Colonoscopy (Jan 2026) example has no body — that report content lives in the Stanford pathology DR. Need same per-result body scrape as labs (Phase 4). |
+| Procedure | mixed + Stanford native | ✅ | ✅ Stanford (surgery cases) | **62** | ✅ list + Stanford surgery detail | ✅ | **Phase 6a Stanford surgery scrape shipped (2026-08-10)** via `POST /orion/public/ajax/v1/surgery/allSurgeries` (body `{"numOfDays":730}`). 1 surgery case → 3 Procedure resources (each billable code becomes its own Procedure with providerNPI, location, performedDateTime). Includes the Jan 2026 colonoscopy that motivated Phase 4. |
 | Observation | mixed | ✅ | ✅ | ~40,000 | ✅ Search, Profile vitals | ✅ | Strong. Quality patches in `DATA_QUALITY_CHECKLIST.md`. **Phase 4-3 added 3,555 structured component-result Observations from 479 Stanford labs** (`urn:stanford:myhealth:component-result`). |
 | DiagnosticReport (lab/imaging/path) | Stanford, MSKCC, LabCorp | ✅ 489 from Stanford as `urn:stanford:myhealth:order` | ✅ Stanford (479/489 = 98%) | 2,103 | ✅ Search | ✅ for the 479 Stanford labs (component-level Observations) | **Phase 4 complete for Stanford labs.** Two-step API (GetDetails + LoadReportContent) reverse-engineered via portal-scout; ~70s for the full batch. 10 outliers (imaging-only/comments-only/metadata-only) skipped. |
 | DocumentReference (clinical notes) | Stanford (via mobile), MSKCC, UCSF | ✅ | ✅ | 821 | ✅ inline on encounter | ✅ via `loadBinaryNoteInto` | Strong since Phase 2 (per-visit-note scrape). |
@@ -167,6 +167,7 @@ Bump the "Last counts taken" date when you update. If a count's status emoji cha
 
 ## Changelog
 
+- **2026-08-10** — v5. Phase 6 (Stanford orion endpoints via after-auth orchestrator): Procedures 59→62 (Jan 2026 colonoscopy body finally captured — the case that motivated Phase 4), Appointments 0→4 (first Appointment resources in HAPI). Auto-scrape orchestrator now runs 4 tasks per sign-in (labs, messages, clinical triad, orion) with zero taps beyond MFA — see `feedback-auto-run-after-auth` memory. Next gap: Medicines (only ~52 of 739 MedRequests are Stanford-native today; endpoint returns HTML — hidden-JSON discovery is next scout target).
 - **2026-06-25** — v4. Phase 5 Stanford clinical-triad ingest: Allergies (3→4), Immunizations (13→33; 13 native rows fan out to 20 dose-events), Conditions (65→79). Endpoint contracts mined from the v1.12 portal-scout's full-surface capture and templated through `ScrapeJobs.stanfordClinicalLoadList`. Same pattern unblocks the remaining 12 sections mapped in `tools/portal-scout/specs/stanford-v1.json`.
 - **2026-06-23 (later)** — v3. Patient consolidation: canonical `Patient/bina-user-urisarid` + 15 sub-identity Patients (one per data source); 43,879 resources reassigned to point at the matching sub-identity. Subject coverage now 100% across all major resource types (was 5%). Known limitation: HAPI's `Patient/$everything` doesn't follow `Patient.link` by default — the live app uses per-type `subject=Patient/X` searches and doesn't hit this. See `tools/patient_consolidation/consolidate_patients.py`.
 - **2026-06-23** — v2. Phase 4 complete for Stanford labs: 3,555 structured component-result Observations added across 479 DRs. Discovered systemic pre-existing gap: 1,991/2,103 DRs lack `subject` reference (only 112 are patient-linked), and 7 Patient resources exist for one human — needs dedup + backfill.
