@@ -2020,6 +2020,28 @@ class ScrapeJobs {
   ///   - on the top frame only: the [window.__portalScout] surface, including
   ///     `enumerateAllFrames()` which broadcasts to all descendants and
   ///     aggregates responses.
+  /// Neutralize page-level paste/copy/cut blockers so the user can
+  /// paste credentials, MFA codes, notes, etc. into any input on any
+  /// portal page. Wired as an AT_DOCUMENT_START user script so it
+  /// beats every page-registered handler (including inline `onpaste="…"`
+  /// attributes) to the punch. We do not preventDefault — the browser's
+  /// default paste behavior still runs; we just stop the page's own
+  /// listeners from ever seeing the event.
+  ///
+  /// Idempotent + subframe-safe (fires per-frame from the UserScript
+  /// injection point).
+  static String pasteUnblocker() => r'''
+(() => {
+  if (window.__binaPasteUnblocked) return;
+  window.__binaPasteUnblocked = true;
+  for (const evt of ['paste', 'copy', 'cut']) {
+    const stop = e => e.stopImmediatePropagation();
+    window.addEventListener(evt, stop, true);
+    document.addEventListener(evt, stop, true);
+  }
+})();
+''';
+
   static String bootstrapForUserScript() => r'''
 (() => {
   if (window.__binaPortalScoutBootstrapped) return;

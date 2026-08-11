@@ -227,6 +227,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               // page) is invisible to the scout — exactly what tripped v1.1.
               initialUserScripts: UnmodifiableListView<UserScript>([
                 UserScript(
+                  source: ScrapeJobs.pasteUnblocker(),
+                  injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                  forMainFrameOnly: false,
+                ),
+                UserScript(
                   source: ScrapeJobs.bootstrapForUserScript(),
                   injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                   forMainFrameOnly: false,
