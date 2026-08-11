@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+
+import 'portal/portal_registry.dart';
 import 'screens/scrape_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await PortalRegistry.load();
   runApp(const BinaApp());
 }
 

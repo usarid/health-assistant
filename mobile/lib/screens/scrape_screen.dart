@@ -5,8 +5,8 @@ import 'dart:math' show Random;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import '../portal/portal_registry.dart';
 import '../scrape/scrape_jobs.dart';
-import '../scrape/stanford_config.dart';
 import '../storage/credentials_store.dart';
 import '../storage/local_writer.dart';
 
@@ -34,6 +34,12 @@ class ScrapeScreen extends StatefulWidget {
 
 class _ScrapeScreenState extends State<ScrapeScreen> {
   InAppWebViewController? _ctrl;
+
+  /// Currently-active portal (values only — URLs, hostnames, CSRF field
+  /// names). Meaty scraping logic lives in scrape_jobs.dart / the
+  /// pipeline methods on this class; anything portal-specific in there
+  /// still refers to Stanford hostnames inline (R-2 territory).
+  PortalConfig get _portal => PortalRegistry.instance.active;
 
   String _status = 'Log into Stanford MyHealth';
   String _currentUrl = '';
@@ -208,10 +214,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           ),
           Expanded(
             child: InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri(StanfordConfig.loginUrl)),
+              initialUrlRequest: URLRequest(url: WebUri(_portal.urls.login)),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
-                userAgent: StanfordConfig.mobileUserAgent,
+                userAgent: _portal.userAgent,
               ),
               // Portal scout bootstrap — runs at document-start in every
               // frame (top wrapper + cross-origin iframes alike) so the
@@ -263,7 +269,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
-                final onSignedIn = urlStr.contains(StanfordConfig.signedInMarker);
+                final onSignedIn = urlStr.contains(_portal.urls.signedInMarker);
                 setState(() {
                   _currentUrl = urlStr;
                   _onSignedInPage = onSignedIn;
@@ -534,7 +540,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       final hasPw     = probe['hasPasswordInput'] == true;
       final hasLogout = probe['hasLogout'] == true;
       final liveUrl   = (probe['url'] ?? '').toString();
-      final onSigned  = liveUrl.contains(StanfordConfig.signedInMarker);
+      final onSigned  = liveUrl.contains(_portal.urls.signedInMarker);
       if (onSigned && !hasPw && hasLogout) {
         _scoutAutoRepollTimer?.cancel();
         _scoutAutoRepollTimer = null;
@@ -601,7 +607,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       final hasPw     = probe['hasPasswordInput'] == true;
       final hasLogout = probe['hasLogout'] == true;
       final liveUrl   = (probe['url'] ?? '').toString();
-      final onSigned  = liveUrl.contains(StanfordConfig.signedInMarker);
+      final onSigned  = liveUrl.contains(_portal.urls.signedInMarker);
       if (onSigned && !hasPw && hasLogout) {
         _orchestratorAutoRepollTimer?.cancel();
         _orchestratorAutoRepollTimer = null;
@@ -1490,7 +1496,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   /// (list-view, fixed by the multi-note JS branch), not transient. If a
   /// genuinely slow-render case appears later, narrow retry can come back.
   Future<Map<String, dynamic>?> _scrapeOneVisit(String csn) async {
-    final url = StanfordConfig.visitDetailUrlPattern
+    final url = _portal.urls.visitDetailPattern
         .replaceAll('%CSN%', Uri.encodeComponent(csn));
 
     // Settle was 4s historically (worked but conservative). The JS itself
@@ -1576,8 +1582,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     try {
       for (final folder in const ['inbox', 'outbox']) {
         final baseUrl = folder == 'inbox'
-            ? StanfordConfig.messageInboxUrl
-            : StanfordConfig.messageOutboxUrl;
+            ? _portal.urls.messageInbox
+            : _portal.urls.messageOutbox;
         final seenIds = <String>{};
         int page = 1;
         // Cursor pagination: Stanford's response carries `nextPageBeginMessageId`

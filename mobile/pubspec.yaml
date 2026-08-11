@@ -43,3 +43,4 @@ flutter:
   # discovery so production app never bundles patient data.
   assets:
     - assets/
+    - assets/portals/
