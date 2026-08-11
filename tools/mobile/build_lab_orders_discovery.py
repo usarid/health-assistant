@@ -16,6 +16,7 @@ Per P-PHI-STAYS-LOCAL: this script reads from localhost HAPI and writes
 to local disk. Nothing leaves the host. Only counts emitted.
 """
 
+import argparse
 import json
 import sys
 import urllib.parse
@@ -23,10 +24,11 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-OUT_FILE = REPO_ROOT / 'tools' / 'v3' / 'out' / 'stanford-lab-orders.json'
-HAPI_BASE = 'http://localhost:8090/fhir'
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
 
-IDENT_SYSTEM = 'urn:stanford:myhealth:order'
+V3_OUT = REPO_ROOT / 'tools' / 'v3' / 'out'
+HAPI_BASE = 'http://localhost:8090/fhir'
 
 
 def hapi_get(path):
@@ -36,6 +38,14 @@ def hapi_get(path):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
+    args = ap.parse_args()
+    portal = get_portal(args.portal)
+    IDENT_SYSTEM = portal.identifier_system('order')
+    OUT_FILE = V3_OUT / f'{portal.id}-lab-orders.json'
+    print(f'Portal: {portal.name} ({portal.id})')
     print(f'Querying HAPI for DiagnosticReports with {IDENT_SYSTEM} identifiers…')
     sys_param = urllib.parse.quote(f'{IDENT_SYSTEM}|', safe=':')
     rows = []
@@ -75,7 +85,7 @@ def main():
     print(f'  found: {len(rows)} lab orders')
 
     payload = {
-        'portal': 'stanford',
+        'portal': portal.id,
         'sourceQuery': f'DiagnosticReport?identifier={IDENT_SYSTEM}|',
         'count': len(rows),
         'orders': rows,

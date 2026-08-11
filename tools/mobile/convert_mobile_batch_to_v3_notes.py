@@ -27,14 +27,21 @@ This script joins on CSN to find each visit's metadata, then:
 Per P-PHI-STAYS-LOCAL: only counts emitted.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
+
 V3_OUT = REPO_ROOT / 'tools' / 'v3' / 'out'
-VISITS_FILE = V3_OUT / 'stanford-v3-visits.json'
-NOTES_FILE = V3_OUT / 'stanford-v3-notes.json'
+
+# Portal-derived paths populated in main() from --portal.
+PORTAL = None
+VISITS_FILE = None
+NOTES_FILE = None
 
 
 def make_v3_entry(visit, html, captured_at, sub_index=None, label=None,
@@ -72,14 +79,21 @@ def make_v3_entry(visit, html, captured_at, sub_index=None, label=None,
 
 
 def main():
-    if len(sys.argv) < 2:
-        print('usage: convert_mobile_batch_to_v3_notes.py <stanford-batch-*.json> [<more-batches>...]',
-              file=sys.stderr)
-        print('  Multiple batches merge by CSN — later batches override earlier ones for the same CSN.',
-              file=sys.stderr)
-        sys.exit(1)
+    ap = argparse.ArgumentParser(
+        description='Merge mobile batch(es) into the v3 notes file for the given portal. '
+                    'Multiple batches merge by CSN — later batches override earlier ones for the same CSN.')
+    ap.add_argument('batches', nargs='+', help='One or more <portal>-batch-*.json files')
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
+    args = ap.parse_args()
 
-    batch_paths = [Path(p) for p in sys.argv[1:]]
+    global PORTAL, VISITS_FILE, NOTES_FILE
+    PORTAL = get_portal(args.portal)
+    VISITS_FILE = V3_OUT / f'{PORTAL.id}-v3-visits.json'
+    NOTES_FILE  = V3_OUT / f'{PORTAL.id}-v3-notes.json'
+    print(f'Portal: {PORTAL.name} ({PORTAL.id})')
+
+    batch_paths = [Path(p) for p in args.batches]
     for bp in batch_paths:
         if not bp.exists():
             print(f'ERROR: {bp} not found', file=sys.stderr)

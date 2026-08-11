@@ -67,15 +67,23 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLINICAL_DIR = REPO_ROOT / 'tools' / 'v3' / 'out' / 'stanford-clinical'
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
+
 HAPI_BASE = 'http://localhost:8090/fhir'
+V3_OUT = REPO_ROOT / 'tools' / 'v3' / 'out'
 
-# Stanford sub-identity Patient (from patient_consolidation work — commit 2334015)
-STANFORD_PATIENT_REF = 'Patient/eLnGIsbP3w5yfjWlLiwicjQI2Qqhzi1Zkub17YmdqWg03'
-
-IDENT_ALLERGY      = 'urn:stanford:myhealth:allergy'
-IDENT_IMMUNIZATION = 'urn:stanford:myhealth:immunization'
-IDENT_CONDITION    = 'urn:stanford:myhealth:condition'
+# Portal + derived constants are populated in main() from --portal.
+PORTAL = None
+CLINICAL_DIR = None
+PATIENT_REF = None
+SRC_PORTAL_TAG = None
+IDENT_ALLERGY = None
+IDENT_IMMUNIZATION = None
+IDENT_CONDITION = None
+ID_PREFIX_ALLERG = None
+ID_PREFIX_IMM = None
+ID_PREFIX_COND = None
 
 SCRAPER_VERSION = 'mobile-flutter-clinical-2026-06-25'
 
@@ -162,7 +170,7 @@ def build_allergy(item):
     reactions = item.get('ReactionList') or []
     date = parse_mdy(item.get('FormattedDateNoted'))
 
-    fhir_id = det_id('stanford-allerg', stanford_id)
+    fhir_id = det_id(ID_PREFIX_ALLERG, stanford_id)
     obj = {
         'resourceType': 'AllergyIntolerance',
         'id': fhir_id,
@@ -181,10 +189,10 @@ def build_allergy(item):
         },
         'type': 'allergy',
         'code': {'text': name},
-        'patient': {'reference': STANFORD_PATIENT_REF},
+        'patient': {'reference': PATIENT_REF},
         'meta': {'tag': [
-            {'system': 'urn:bina:src-portal',     'code': 'stanford.mychart'},
-            {'system': 'urn:bina:src-org',        'code': 'stanford'},
+            {'system': 'urn:bina:src-portal',     'code': SRC_PORTAL_TAG},
+            {'system': 'urn:bina:src-org',        'code': PORTAL.id},
             {'system': 'urn:bina:scraper-version','code': SCRAPER_VERSION},
         ]},
     }
@@ -210,18 +218,18 @@ def build_immunizations(org_imm_item):
     for raw_date in dates:
         iso = parse_mdy(raw_date)
         if not iso: continue
-        fhir_id = det_id('stanford-imm', stanford_id, iso)
+        fhir_id = det_id(ID_PREFIX_IMM, stanford_id, iso)
         out.append({
             'resourceType': 'Immunization',
             'id': fhir_id,
             'identifier': [{'system': IDENT_IMMUNIZATION, 'value': f'{stanford_id}:{iso}'}],
             'status': 'completed',
             'vaccineCode': {'text': name},
-            'patient': {'reference': STANFORD_PATIENT_REF},
+            'patient': {'reference': PATIENT_REF},
             'occurrenceDateTime': iso,
             'meta': {'tag': [
-                {'system': 'urn:bina:src-portal',     'code': 'stanford.mychart'},
-                {'system': 'urn:bina:src-org',        'code': 'stanford'},
+                {'system': 'urn:bina:src-portal',     'code': SRC_PORTAL_TAG},
+                {'system': 'urn:bina:src-org',        'code': PORTAL.id},
                 {'system': 'urn:bina:scraper-version','code': SCRAPER_VERSION},
             ]},
         })
@@ -234,7 +242,7 @@ def build_condition(item):
     name = (item.get('Name') or '').strip()
     if not stanford_id or not name: return None
     date = parse_mdy(item.get('FormattedDateNoted'))
-    fhir_id = det_id('stanford-cond', stanford_id)
+    fhir_id = det_id(ID_PREFIX_COND, stanford_id)
     obj = {
         'resourceType': 'Condition',
         'id': fhir_id,
@@ -252,10 +260,10 @@ def build_condition(item):
             }],
         },
         'code': {'text': name},
-        'subject': {'reference': STANFORD_PATIENT_REF},
+        'subject': {'reference': PATIENT_REF},
         'meta': {'tag': [
-            {'system': 'urn:bina:src-portal',     'code': 'stanford.mychart'},
-            {'system': 'urn:bina:src-org',        'code': 'stanford'},
+            {'system': 'urn:bina:src-portal',     'code': SRC_PORTAL_TAG},
+            {'system': 'urn:bina:src-org',        'code': PORTAL.id},
             {'system': 'urn:bina:scraper-version','code': SCRAPER_VERSION},
         ]},
     }
@@ -276,11 +284,32 @@ def main():
     grp = ap.add_mutually_exclusive_group(required=False)
     grp.add_argument('--dry-run', action='store_true')
     grp.add_argument('--apply',   action='store_true')
-    ap.add_argument('--wipe', action='store_true', help='Delete existing stanford-tagged resources before re-import')
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
+    ap.add_argument('--wipe', action='store_true',
+                    help='Delete existing resources with this portal\'s identifier system before re-import')
     args = ap.parse_args()
     if not (args.dry_run or args.apply):
         print('Specify --dry-run or --apply'); sys.exit(2)
     apply = args.apply
+
+    # Populate the module-level portal-derived constants. Downstream
+    # build_ functions read these via `global`-implicit lookup.
+    global PORTAL, CLINICAL_DIR, PATIENT_REF, SRC_PORTAL_TAG
+    global IDENT_ALLERGY, IDENT_IMMUNIZATION, IDENT_CONDITION
+    global ID_PREFIX_ALLERG, ID_PREFIX_IMM, ID_PREFIX_COND
+    PORTAL = get_portal(args.portal)
+    CLINICAL_DIR = PORTAL.input_dir(V3_OUT, 'clinical')
+    PATIENT_REF = PORTAL.patient_ref
+    SRC_PORTAL_TAG = PORTAL.src_portal_tag
+    IDENT_ALLERGY      = PORTAL.identifier_system('allergy')
+    IDENT_IMMUNIZATION = PORTAL.identifier_system('immunization')
+    IDENT_CONDITION    = PORTAL.identifier_system('condition')
+    ID_PREFIX_ALLERG   = f'{PORTAL.id}-allerg'
+    ID_PREFIX_IMM      = f'{PORTAL.id}-imm'
+    ID_PREFIX_COND     = f'{PORTAL.id}-cond'
+    print(f'Portal: {PORTAL.name} ({PORTAL.id})')
+    print(f'  clinical dir: {CLINICAL_DIR}')
 
     if args.wipe and apply:
         wipe_by_identifier_system('AllergyIntolerance', IDENT_ALLERGY)
@@ -292,7 +321,7 @@ def main():
     bundle_entries = []
 
     # ALLERGIES
-    f = latest_file('stanford-allergies-*.json')
+    f = latest_file(f'{PORTAL.id}-allergies-*.json')
     if f:
         d = json.load(open(f))
         items = (d['list'].get('DataList') or [])
@@ -304,10 +333,10 @@ def main():
                 bundle_entries.append(put_entry(r))
                 stats['allergies'] += 1
     else:
-        print('  (no stanford-allergies-*.json found)')
+        print(f'  (no {PORTAL.id}-allergies-*.json found)')
 
     # IMMUNIZATIONS
-    f = latest_file('stanford-immunizations-*.json')
+    f = latest_file(f'{PORTAL.id}-immunizations-*.json')
     if f:
         d = json.load(open(f))
         orgs = (d['list'].get('OrganizationImmunizationList') or [])
@@ -319,10 +348,10 @@ def main():
                     stats['immunization-doses'] += 1
                 stats['immunization-rows'] += 1
     else:
-        print('  (no stanford-immunizations-*.json found)')
+        print(f'  (no {PORTAL.id}-immunizations-*.json found)')
 
     # CONDITIONS (HealthIssues)
-    f = latest_file('stanford-healthissues-*.json')
+    f = latest_file(f'{PORTAL.id}-healthissues-*.json')
     if f:
         d = json.load(open(f))
         items = (d['list'].get('DataList') or [])
@@ -334,7 +363,7 @@ def main():
                 bundle_entries.append(put_entry(r))
                 stats['conditions'] += 1
     else:
-        print('  (no stanford-healthissues-*.json found)')
+        print(f'  (no {PORTAL.id}-healthissues-*.json found)')
 
     print(f'\n=== Plan ===')
     for k, v in sorted(stats.items()):

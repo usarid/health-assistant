@@ -61,13 +61,20 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLINICAL_DIR = REPO_ROOT / 'tools' / 'v3' / 'out' / 'stanford-clinical'
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
+
 HAPI_BASE = 'http://localhost:8090/fhir'
+V3_OUT = REPO_ROOT / 'tools' / 'v3' / 'out'
 
-STANFORD_PATIENT_REF = 'Patient/eLnGIsbP3w5yfjWlLiwicjQI2Qqhzi1Zkub17YmdqWg03'
-
-IDENT_MEDREQ = 'urn:stanford:myhealth:medication-rx'
-IDENT_PROVIDER = 'urn:stanford:myhealth:provider-id'
+# Portal-derived constants populated in main() from --portal.
+PORTAL = None
+CLINICAL_DIR = None
+PATIENT_REF = None
+SRC_PORTAL_TAG = None
+IDENT_MEDREQ = None
+IDENT_PROVIDER = None
+ID_PREFIX_MEDRX = None
 
 SCRAPER_VERSION = 'mobile-flutter-meds-2026-08-10'
 
@@ -145,8 +152,8 @@ def latest_file(pattern):
 
 def stanford_meta_tags(rx):
     tags = [
-        {'system': 'urn:bina:src-portal',     'code': 'stanford.mychart'},
-        {'system': 'urn:bina:src-org',        'code': 'stanford'},
+        {'system': 'urn:bina:src-portal',     'code': SRC_PORTAL_TAG},
+        {'system': 'urn:bina:src-org',        'code': PORTAL.id},
         {'system': 'urn:bina:scraper-version','code': SCRAPER_VERSION},
     ]
     cls = rx.get('ClassList') or []
@@ -167,7 +174,7 @@ def build_medreq(rx):
         return None
     cls = rx.get('ClassList') or []
     refill_enabled = 'refill-enabled' in cls
-    fhir_id = det_id('stanford-medrx', stanford_id)
+    fhir_id = det_id(ID_PREFIX_MEDRX, stanford_id)
     obj = {
         'resourceType': 'MedicationRequest',
         'id': fhir_id,
@@ -175,7 +182,7 @@ def build_medreq(rx):
         'status': 'active' if refill_enabled else 'completed',
         'intent': 'plan' if rx.get('IsPatientReported') else 'order',
         'medicationCodeableConcept': {'text': name},
-        'subject': {'reference': STANFORD_PATIENT_REF},
+        'subject': {'reference': PATIENT_REF},
         'reportedBoolean': bool(rx.get('IsPatientReported')),
         'meta': {'tag': stanford_meta_tags(rx)},
     }
@@ -247,17 +254,31 @@ def main():
     grp = ap.add_mutually_exclusive_group(required=True)
     grp.add_argument('--dry-run', action='store_true')
     grp.add_argument('--apply',   action='store_true')
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
     ap.add_argument('--wipe', action='store_true',
-                    help='Delete existing stanford-medrx MedicationRequests before re-import')
+                    help='Delete existing MedicationRequests for this portal before re-import')
     args = ap.parse_args()
     apply = args.apply
+
+    global PORTAL, CLINICAL_DIR, PATIENT_REF, SRC_PORTAL_TAG
+    global IDENT_MEDREQ, IDENT_PROVIDER, ID_PREFIX_MEDRX
+    PORTAL = get_portal(args.portal)
+    CLINICAL_DIR = PORTAL.input_dir(V3_OUT, 'clinical')
+    PATIENT_REF = PORTAL.patient_ref
+    SRC_PORTAL_TAG = PORTAL.src_portal_tag
+    IDENT_MEDREQ    = PORTAL.identifier_system('medication-rx')
+    IDENT_PROVIDER  = PORTAL.identifier_system('provider-id')
+    ID_PREFIX_MEDRX = f'{PORTAL.id}-medrx'
+    print(f'Portal: {PORTAL.name} ({PORTAL.id})')
+    print(f'  clinical dir: {CLINICAL_DIR}')
 
     if args.wipe and apply:
         wipe_by_identifier_system('MedicationRequest', IDENT_MEDREQ)
 
-    f = latest_file('stanford-medications-2*.json')
+    f = latest_file(f'{PORTAL.id}-medications-2*.json')
     if not f:
-        print('No stanford-medications-*.json found under', CLINICAL_DIR)
+        print(f'No {PORTAL.id}-medications-*.json found under', CLINICAL_DIR)
         sys.exit(1)
     print(f'Reading {f.name}')
     d = json.load(open(f))

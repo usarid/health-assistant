@@ -58,12 +58,19 @@ from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LABS_DIR = REPO_ROOT / 'tools' / 'v3' / 'out' / 'stanford-labs'
-HAPI_BASE = 'http://localhost:8090/fhir'
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
 
-DR_IDENT_SYSTEM = 'urn:stanford:myhealth:order'
-OBS_IDENT_SYSTEM = 'urn:stanford:myhealth:component-result'
-STANFORD_COMPONENT_SYSTEM = 'urn:stanford:component-id'
+HAPI_BASE = 'http://localhost:8090/fhir'
+V3_OUT = REPO_ROOT / 'tools' / 'v3' / 'out'
+
+# Portal-derived constants populated in main() from --portal.
+PORTAL = None
+LABS_DIR = None
+SRC_PORTAL_TAG = None
+DR_IDENT_SYSTEM = None
+OBS_IDENT_SYSTEM = None
+COMPONENT_SYSTEM = None
 
 SCRAPER_VERSION = 'mobile-flutter-getdetails-2026-06-24'
 
@@ -181,7 +188,7 @@ def build_observation(eorderid: str, dr_index_entry: dict, component: dict,
         'code': {
             'text': common_name,
             'coding': [{
-                'system': STANFORD_COMPONENT_SYSTEM,
+                'system': COMPONENT_SYSTEM,
                 'code': component_id,
                 'display': common_name,
             }] if component_id else [],
@@ -190,8 +197,8 @@ def build_observation(eorderid: str, dr_index_entry: dict, component: dict,
         'effectiveDateTime': effective_iso or None,
         'meta': {
             'tag': [
-                {'system': 'urn:bina:src-portal', 'code': 'stanford.mychart'},
-                {'system': 'urn:bina:src-org',    'code': 'stanford'},
+                {'system': 'urn:bina:src-portal', 'code': SRC_PORTAL_TAG},
+                {'system': 'urn:bina:src-org',    'code': PORTAL.id},
                 {'system': 'urn:bina:scraper-version', 'code': SCRAPER_VERSION},
             ],
         },
@@ -336,15 +343,30 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true', help='Build bundles, do not POST')
     ap.add_argument('--limit', type=int, default=None, help='Process only the first N lab files')
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
     ap.add_argument('--wipe',  action='store_true',
-                    help='Delete all existing component-result Observations before re-import')
+                    help='Delete all existing component-result Observations for this portal before re-import')
     args = ap.parse_args()
     if args.wipe and args.dry_run:
         print('--wipe and --dry-run are mutually exclusive'); sys.exit(2)
+
+    global PORTAL, LABS_DIR, SRC_PORTAL_TAG, DR_IDENT_SYSTEM, OBS_IDENT_SYSTEM, COMPONENT_SYSTEM
+    PORTAL = get_portal(args.portal)
+    LABS_DIR = PORTAL.input_dir(V3_OUT, 'labs')
+    SRC_PORTAL_TAG = PORTAL.src_portal_tag
+    DR_IDENT_SYSTEM = PORTAL.identifier_system('order')
+    OBS_IDENT_SYSTEM = PORTAL.identifier_system('component-result')
+    # component-id is a portal-native identifier (Epic's internal component id).
+    # System URN uses just the portal id since it's not scoped to any product.
+    COMPONENT_SYSTEM = f'urn:{PORTAL.id}:component-id'
+    print(f'Portal: {PORTAL.name} ({PORTAL.id})')
+    print(f'  labs dir: {LABS_DIR}')
+
     if args.wipe:
         wipe_existing_observations()
 
-    files = sorted(glob.glob(str(LABS_DIR / 'stanford-lab-*.json')))
+    files = sorted(glob.glob(str(LABS_DIR / f'{PORTAL.id}-lab-*.json')))
     if args.limit:
         files = files[: args.limit]
     print(f'Lab files to process: {len(files)}')

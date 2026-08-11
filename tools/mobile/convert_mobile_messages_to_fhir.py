@@ -47,9 +47,17 @@ from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
+
 HAPI_BASE = 'http://localhost:8090/fhir'
 
-IDENT_SYSTEM = 'urn:stanford:myhealth:message'
+# Portal-derived constants populated in main() from --portal.
+PORTAL = None
+IDENT_SYSTEM = None
+SRC_PORTAL_TAG = None
+ID_PREFIX_MSG = None
+
 NS_SRC_PORTAL = 'http://binahealth.org/ns/src-portal'
 NS_SRC_ORG = 'http://binahealth.org/ns/src-org'
 NS_SRC_FILE = 'http://binahealth.org/ns/src-file'
@@ -116,11 +124,11 @@ def message_to_communication(record: dict, src_file: str) -> dict:
         sender = {'display': PATIENT_DISPLAY}
         recipient = [{'display': recipient_name or 'Unknown clinician'}]
 
-    rid = det_id('comm-stanford', msg_id)
+    rid = det_id(ID_PREFIX_MSG, msg_id)
 
     tags = [
-        {'system': NS_SRC_PORTAL, 'code': 'stanford.mychart'},
-        {'system': NS_SRC_ORG, 'code': 'stanford'},
+        {'system': NS_SRC_PORTAL, 'code': SRC_PORTAL_TAG},
+        {'system': NS_SRC_ORG, 'code': PORTAL.id},
         {'system': NS_SRC_FOLDER, 'code': folder},
         {'system': NS_SCRAPER_VER, 'code': SCRAPER_VERSION},
         {'system': NS_SRC_FILE, 'code': src_file},
@@ -248,18 +256,26 @@ def wipe_stanford_messages():
 
 
 def main():
-    global HAPI_BASE
+    global HAPI_BASE, PORTAL, IDENT_SYSTEM, SRC_PORTAL_TAG, ID_PREFIX_MSG
     default_base = HAPI_BASE
     ap = argparse.ArgumentParser()
-    ap.add_argument('batch', help='Path to stanford-message-batch-*.json')
+    ap.add_argument('batch', help='Path to <portal>-message-batch-*.json')
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
     ap.add_argument('--wipe', action='store_true',
-                    help='Delete all existing stanford-msg Communications before POSTing')
+                    help='Delete all existing Communications with this portal\'s system before POSTing')
     ap.add_argument('--dry-run', action='store_true',
                     help='Build the bundle but skip wipe + POST')
     ap.add_argument('--base-url', default=default_base,
                     help=f'HAPI base URL (default: {default_base})')
     args = ap.parse_args()
     HAPI_BASE = args.base_url.rstrip('/')
+
+    PORTAL = get_portal(args.portal)
+    IDENT_SYSTEM = PORTAL.identifier_system('message')
+    SRC_PORTAL_TAG = PORTAL.src_portal_tag
+    ID_PREFIX_MSG = f'comm-{PORTAL.id}'
+    print(f'Portal: {PORTAL.name} ({PORTAL.id})')
 
     batch_path = Path(args.batch)
     if not batch_path.exists():

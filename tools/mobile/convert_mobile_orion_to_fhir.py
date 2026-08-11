@@ -58,13 +58,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CLINICAL_DIR = REPO_ROOT / 'tools' / 'v3' / 'out' / 'stanford-clinical'
+sys.path.insert(0, str(REPO_ROOT / 'tools'))
+from portal_registry import get_portal  # noqa: E402
+
 HAPI_BASE = 'http://localhost:8090/fhir'
+V3_OUT = REPO_ROOT / 'tools' / 'v3' / 'out'
 
-STANFORD_PATIENT_REF = 'Patient/eLnGIsbP3w5yfjWlLiwicjQI2Qqhzi1Zkub17YmdqWg03'
-
-IDENT_PROCEDURE   = 'urn:stanford:myhealth:surgery-case'
-IDENT_APPOINTMENT = 'urn:stanford:myhealth:appointment'
+# Portal-derived constants populated in main() from --portal.
+PORTAL = None
+CLINICAL_DIR = None
+PATIENT_REF = None
+SRC_PORTAL_TAG = None
+IDENT_PROCEDURE = None
+IDENT_APPOINTMENT = None
+ID_PREFIX_PROC = None
+ID_PREFIX_APPT = None
 
 SCRAPER_VERSION = 'mobile-flutter-orion-2026-06-25'
 
@@ -159,8 +167,8 @@ def latest_file(pattern):
 
 def stanford_meta_tags():
     return [
-        {'system': 'urn:bina:src-portal',     'code': 'stanford.mychart'},
-        {'system': 'urn:bina:src-org',        'code': 'stanford'},
+        {'system': 'urn:bina:src-portal',     'code': SRC_PORTAL_TAG},
+        {'system': 'urn:bina:src-org',        'code': PORTAL.id},
         {'system': 'urn:bina:scraper-version','code': SCRAPER_VERSION},
     ]
 
@@ -190,7 +198,7 @@ def build_procedures(case):
         if not name: continue
         provider = (p.get('providerName') or '').strip()
         npi = (p.get('providerNPI') or '').strip()
-        fhir_id = det_id('stanford-proc', case_id or 'nocase', name, npi)
+        fhir_id = det_id(ID_PREFIX_PROC, case_id or 'nocase', name, npi)
         r = {
             'resourceType': 'Procedure',
             'id': fhir_id,
@@ -198,7 +206,7 @@ def build_procedures(case):
                             'value': f'{case_id}:{name}:{npi}'}],
             'status': status,
             'code': {'text': name},
-            'subject': {'reference': STANFORD_PATIENT_REF},
+            'subject': {'reference': PATIENT_REF},
             'meta': {'tag': stanford_meta_tags()},
         }
         if when_iso: r['performedDateTime'] = when_iso
@@ -218,7 +226,7 @@ def build_procedures(case):
 def build_appointment(a):
     csn = (a.get('csn') or '').strip()
     if not csn: return None
-    fhir_id = det_id('stanford-appt', csn)
+    fhir_id = det_id(ID_PREFIX_APPT, csn)
     when_iso = epoch_millis_to_iso(a.get('appointmentDateTime'))
     duration = a.get('duration')
     now = datetime.now(tz=timezone.utc).isoformat()
@@ -231,7 +239,7 @@ def build_appointment(a):
     # provider-line bug 2026-08-10). Department goes into
     # serviceProvider/location where the UI reads them separately.
     participants = [{
-        'actor': {'reference': STANFORD_PATIENT_REF},
+        'actor': {'reference': PATIENT_REF},
         'status': 'accepted',
         'required': 'required',
     }]
@@ -300,9 +308,24 @@ def main():
     grp = ap.add_mutually_exclusive_group(required=True)
     grp.add_argument('--dry-run', action='store_true')
     grp.add_argument('--apply',   action='store_true')
+    ap.add_argument('--portal', default='stanford',
+                    help='Portal id from mobile/assets/portals/*.json (default: stanford)')
     ap.add_argument('--wipe', action='store_true')
     args = ap.parse_args()
     apply = args.apply
+
+    global PORTAL, CLINICAL_DIR, PATIENT_REF, SRC_PORTAL_TAG
+    global IDENT_PROCEDURE, IDENT_APPOINTMENT, ID_PREFIX_PROC, ID_PREFIX_APPT
+    PORTAL = get_portal(args.portal)
+    CLINICAL_DIR = PORTAL.input_dir(V3_OUT, 'clinical')
+    PATIENT_REF = PORTAL.patient_ref
+    SRC_PORTAL_TAG = PORTAL.src_portal_tag
+    IDENT_PROCEDURE   = PORTAL.identifier_system('surgery-case')
+    IDENT_APPOINTMENT = PORTAL.identifier_system('appointment')
+    ID_PREFIX_PROC = f'{PORTAL.id}-proc'
+    ID_PREFIX_APPT = f'{PORTAL.id}-appt'
+    print(f'Portal: {PORTAL.name} ({PORTAL.id})')
+    print(f'  clinical dir: {CLINICAL_DIR}')
 
     if args.wipe and apply:
         wipe_by_identifier_system('Procedure',   IDENT_PROCEDURE)
@@ -312,7 +335,7 @@ def main():
     bundle_entries = []
 
     # PROCEDURES
-    f = latest_file('stanford-procedures-*.json')
+    f = latest_file(f'{PORTAL.id}-procedures-*.json')
     if f:
         d = json.load(open(f))
         cases = (d['list'].get('surgeryCaseList') or [])
@@ -323,10 +346,10 @@ def main():
                 stats['procedures'] += 1
             stats['surgery-cases'] += 1
     else:
-        print('  (no stanford-procedures-*.json found)')
+        print(f'  (no {PORTAL.id}-procedures-*.json found)')
 
     # APPOINTMENTS
-    f = latest_file('stanford-appointments-*.json')
+    f = latest_file(f'{PORTAL.id}-appointments-*.json')
     if f:
         d = json.load(open(f))
         appts = (d['list'].get('appointments') or [])
@@ -337,7 +360,7 @@ def main():
                 bundle_entries.append(put_entry(r))
                 stats['appointments'] += 1
     else:
-        print('  (no stanford-appointments-*.json found)')
+        print(f'  (no {PORTAL.id}-appointments-*.json found)')
 
     print(f'\n=== Plan ===')
     for k, v in sorted(stats.items()):
