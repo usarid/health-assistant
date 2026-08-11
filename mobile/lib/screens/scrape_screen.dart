@@ -64,6 +64,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   bool _autoScoutOnSignIn = false;
   bool _scoutRanThisSession = false; // guards against re-fire on session re-login
 
+  // When true (default), lab/message body fetches skip items that are
+  // already on disk. Toggled OFF by the "Refetch everything (ignore
+  // cache)" menu item — useful after Stanford issues an addendum /
+  // correction, or when we need a full re-pull for debugging.
+  bool _incrementalScrape = true;
+
   // After-auth scrape ORCHESTRATOR — runs every known per-section
   // scraper in sequence as soon as the user is signed in. The user's
   // explicit principle: routine ingest should never require a menu tap,
@@ -141,6 +147,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                     : 'Enable auto-scrape on sign-in'),
               ),
               const PopupMenuItem(value: 'run-full-scrape', child: Text('Run full scrape now')),
+              const PopupMenuItem(value: 'refetch-everything', child: Text('Refetch everything (ignore cache)')),
               const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'toggle-auto-scout',
@@ -1134,6 +1141,17 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _orchestratorAutoRepollTimer?.cancel(); _orchestratorAutoRepollTimer = null;
       _orchestratorRanThisSession = false;
       await _runFullScrapePipeline();
+    } else if (value == 'refetch-everything') {
+      _orchestratorAutoFireTimer?.cancel();   _orchestratorAutoFireTimer = null;
+      _orchestratorAutoRepollTimer?.cancel(); _orchestratorAutoRepollTimer = null;
+      _orchestratorRanThisSession = false;
+      final prev = _incrementalScrape;
+      _incrementalScrape = false;
+      try {
+        await _runFullScrapePipeline();
+      } finally {
+        _incrementalScrape = prev;
+      }
     } else if (value == 'toggle-auto-scout') {
       setState(() => _autoScoutOnSignIn = !_autoScoutOnSignIn);
       // Cancel any pending countdown / repoll if the user just disabled.
@@ -1732,6 +1750,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final errors = <Map<String, dynamic>>[];
     final rng = Random();
     try {
+      int skipped = 0;
       for (int i = 0; i < orders.length; i++) {
         if (_abortRequested) {
           setState(() => _status = 'Aborted at $i/${orders.length}');
@@ -1739,10 +1758,19 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         }
         final eorderid = orders[i]['eorderid'] as String;
         final code = (orders[i]['code'] ?? '').toString();
+        // Skip-if-on-disk (incremental scrape). Lab bodies are effectively
+        // immutable at Stanford; re-fetching costs ~320ms per lab, so a
+        // 489-lab pass takes 2.5min for zero new data. Menu toggle
+        // "Refetch everything" flips _incrementalScrape off for a full
+        // re-pull (e.g., after an addendum).
+        if (_incrementalScrape && await LocalWriter.hasLabBody(eorderid)) {
+          skipped++;
+          continue;
+        }
         setState(() {
           _batchIndex = i + 1;
           _status = 'Lab $_batchIndex/$_batchTotal '
-              '— ${captured.length} captured, ${errors.length} errors';
+              '— ${captured.length} captured, ${errors.length} errors, $skipped skipped';
         });
         _labDetailCompleter = Completer<Map<String, dynamic>>();
         try {
@@ -1847,6 +1875,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final rng = Random();
 
     try {
+      int skipped = 0;
       for (int i = 0; i < ids.length; i++) {
         if (_abortRequested) {
           setState(() => _status = 'Aborted at $i/${ids.length}');
@@ -1854,10 +1883,17 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         }
         final folder = ids[i]['folder']!;
         final id = ids[i]['id']!;
+        // Skip-if-on-disk (incremental scrape). Message bodies are
+        // immutable at Stanford once sent; ~752 msgs × ~180ms = 2+ min
+        // wasted on a no-op re-pull.
+        if (_incrementalScrape && await LocalWriter.hasMessageBody(folder, id)) {
+          skipped++;
+          continue;
+        }
         setState(() {
           _batchIndex = i + 1;
           _status = 'Fetching $folder/$id  ($_batchIndex/$_batchTotal '
-              '— ${captured.length} captured, ${errors.length} errors)';
+              '— ${captured.length} captured, ${errors.length} errors, $skipped skipped)';
         });
         await LocalWriter.writeMessageBatchManifest(MessageBatchManifest(
           startedAt: _batchStartedAt!,

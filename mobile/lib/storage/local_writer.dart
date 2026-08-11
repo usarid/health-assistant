@@ -207,6 +207,27 @@ class LocalWriter {
     return file.path;
   }
 
+  /// True if we already have a saved body for this eorderid.
+  /// The auto-scrape orchestrator uses this to skip re-fetching bodies
+  /// that are already on disk — labs are effectively immutable at
+  /// Stanford, so once captured they don't need to be re-POSTed on every
+  /// sign-in. Manual "Refetch all" can be used if content changed
+  /// (addenda / corrections).
+  static Future<bool> hasLabBody(String eorderid) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/labs/stanford-lab-${_csnSlug(eorderid)}.json');
+    return file.exists();
+  }
+
+  /// True if we already have a saved body for this (folder, msgId).
+  /// Same idempotency rationale as [hasLabBody] — message bodies are
+  /// immutable at Stanford once sent.
+  static Future<bool> hasMessageBody(String folder, String msgId) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File('${dir.path}/messages/stanford-msg-$folder-${_csnSlug(msgId)}.json');
+    return file.exists();
+  }
+
   /// Consolidated lab batch index — small metadata-only file written
   /// at end of run, lists every captured eorderid + size + per-result
   /// error reasons. Phase 4-3 Python ingest reads this to find which
