@@ -7,8 +7,8 @@
 - Counts are point-in-time. Re-run the counts block (see Appendix) and bump "Last counts taken" whenever you update the matrix. Don't chase small drift.
 - Status changes get a one-line entry in the changelog at the bottom — keeps the history without bloating the matrix.
 
-**Last counts taken:** 2026-08-10 post-orion-triad ingest (HAPI on localhost:8090).
-**Coverage matrix version:** 5.
+**Last counts taken:** 2026-08-10 post-Medications-probe verdict (HAPI on localhost:8090).
+**Coverage matrix version:** 6.
 
 ---
 
@@ -49,7 +49,7 @@ Status emoji: ✅ done · 🟡 partial · ⚠️ in flight · ❌ missing · —
 | DiagnosticReport (lab/imaging/path) | Stanford, MSKCC, LabCorp | ✅ 489 from Stanford as `urn:stanford:myhealth:order` | ✅ Stanford (479/489 = 98%) | 2,103 | ✅ Search | ✅ for the 479 Stanford labs (component-level Observations) | **Phase 4 complete for Stanford labs.** Two-step API (GetDetails + LoadReportContent) reverse-engineered via portal-scout; ~70s for the full batch. 10 outliers (imaging-only/comments-only/metadata-only) skipped. |
 | DocumentReference (clinical notes) | Stanford (via mobile), MSKCC, UCSF | ✅ | ✅ | 821 | ✅ inline on encounter | ✅ via `loadBinaryNoteInto` | Strong since Phase 2 (per-visit-note scrape). |
 | Communication (messages) | Stanford (mobile, 752), MSKCC (legacy, 376) | ✅ | ✅ | 1,128 | ✅ Messages tab | ⚠️ no direct assistant wiring yet | Phase 3 just shipped. Thread-key heuristic improvement queued (`task_e734b339`). |
-| MedicationRequest | mixed | ✅ | ✅ | 739 | ✅ Meds tab | ✅ | Strong. |
+| MedicationRequest | mixed | ✅ | ✅ | 739 (96 active) | ✅ Meds tab | ✅ | Strong. Stanford native: 14 active MedRequests captured Feb 2026; can't cheaply refresh from Stanford's Medications page (React SPA that doesn't expose a med-list JSON endpoint — probed 2026-08-10, see Changelog v6). Refresh path if needed: Epic SMART-on-FHIR OAuth (`api/epic_oauth.py` scaffolded; needs production app-registration with Stanford). |
 | MedicationStatement | — | ❌ | ❌ | **1** ❌ | ❌ | ❌ | Effectively empty. Patient-reported meds + adherence data not captured. |
 | Medication | — | ❌ | ❌ | 0 | ❌ | ❌ | Inline-referenced via MedicationRequest only. |
 | AllergyIntolerance | Stanford native + historical-import + apple-health-records | ✅ Stanford | ✅ Stanford | **4** | ✅ Profile | ✅ | **Phase 5 Stanford native scrape shipped (2026-06-25)** via `POST /myhealth_sso/Clinical/Allergies/LoadListData`. +1 from Stanford; combined with prior historical + apple-health-records sources = 4 total. |
@@ -167,6 +167,7 @@ Bump the "Last counts taken" date when you update. If a count's status emoji cha
 
 ## Changelog
 
+- **2026-08-10 (later)** — v6. Phase 7 verdict: **Stanford's Medications page is a scrape dead-end via the portal**, but the gap is small. Facts: (1) The `/myhealth_sso/Clinical/Medications/LoadListData` endpoint exists (returns 200 OK) but serves HTML not JSON — Stanford breaks the LoadListData convention for this section. (2) A 15-second post-nav scout on `/signedin/records/medications` captured 68 XHRs across 41 unique endpoints — the only med-related JSON was `/orion/public/ajax/v1/medication/renewals` returning 236 bytes (1 refillable med only). (3) The 302 KB Medications page HTML has empty React mount points; the actual med list is rendered by post-mount JS whose data fetches never fire in a 15s window (probably wait for user interaction or a later async trigger). (4) HAPI already has 14 active Stanford MedRequests captured Feb 2026 (testosterone, tamsulosin, propranolol, losartan, esomeprazole, atorvastatin, aspirin, doxycycline, cyanocobalamin, cholecalciferol, magnesium, acyclovir, 2 psyllium formulations); combined with UCSF/Mayo/Sutter actives = 96 total. Recommended refresh path when needed: **Epic SMART-on-FHIR OAuth** — `api/epic_oauth.py` has the auth flow scaffolded (auth-url/callback/status), needs (a) Stanford production app-registration + (b) MedicationRequest import worker. Bigger project; deferred.
 - **2026-08-10** — v5. Phase 6 (Stanford orion endpoints via after-auth orchestrator): Procedures 59→62 (Jan 2026 colonoscopy body finally captured — the case that motivated Phase 4), Appointments 0→4 (first Appointment resources in HAPI). Auto-scrape orchestrator now runs 4 tasks per sign-in (labs, messages, clinical triad, orion) with zero taps beyond MFA — see `feedback-auto-run-after-auth` memory. Next gap: Medicines (only ~52 of 739 MedRequests are Stanford-native today; endpoint returns HTML — hidden-JSON discovery is next scout target).
 - **2026-06-25** — v4. Phase 5 Stanford clinical-triad ingest: Allergies (3→4), Immunizations (13→33; 13 native rows fan out to 20 dose-events), Conditions (65→79). Endpoint contracts mined from the v1.12 portal-scout's full-surface capture and templated through `ScrapeJobs.stanfordClinicalLoadList`. Same pattern unblocks the remaining 12 sections mapped in `tools/portal-scout/specs/stanford-v1.json`.
 - **2026-06-23 (later)** — v3. Patient consolidation: canonical `Patient/bina-user-urisarid` + 15 sub-identity Patients (one per data source); 43,879 resources reassigned to point at the matching sub-identity. Subject coverage now 100% across all major resource types (was 5%). Known limitation: HAPI's `Patient/$everything` doesn't follow `Patient.link` by default — the live app uses per-type `subject=Patient/X` searches and doesn't hit this. See `tools/patient_consolidation/consolidate_patients.py`.
