@@ -659,6 +659,24 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Future<void> _runFullScrapePipeline() async {
     if (_ctrl == null || !_onSignedInPage) return;
     if (_batchRunning || _orchestratorRunning) return;
+    // Per-portal safety gate. All sub-fetchers below write to on-disk
+    // paths that hardcode "stanford-" as the filename prefix (see
+    // LocalWriter), and several of them read Stanford-shaped bundled
+    // assets (stanford-lab-orders.json) or navigate to Stanford-shaped
+    // URL patterns. Running them against a portal that hasn't been
+    // proven end-to-end would silently overwrite good Stanford data
+    // on disk with wrong-portal responses (documented 2026-08-13: 164
+    // empty-shaped UCSF responses landed in labs/stanford-lab-* files
+    // during the first UCSF sign-in). Gate here until R-5 portal-scout
+    // discovers each new portal's endpoint surface + LocalWriter is
+    // refactored to portal-scope its filenames.
+    if (_portal.id != 'stanford') {
+      setState(() => _status =
+          'Auto-scrape isn\'t wired for ${_portal.name} yet — needs R-5 '
+          'portal-scout to discover its endpoint surface first. Browse '
+          'the portal manually, or switch back to Stanford from the menu.');
+      return;
+    }
     setState(() {
       _orchestratorRunning = true;
       _abortRequested = false;
