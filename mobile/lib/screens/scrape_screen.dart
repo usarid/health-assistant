@@ -123,7 +123,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('BinaHealth'),
+        title: Text('BinaHealth · ${_portal.name}'),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         actions: [
@@ -136,44 +136,41 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               minWidth: 260, maxWidth: 360, maxHeight: 520,
             ),
             itemBuilder: (_) => [
-              // Everyday recovery affordances — top of the menu so they're
-              // always reachable without scrolling.
+              // Everyday recovery — top so always reachable.
               PopupMenuItem(value: 'go-to-login', child: Text('Go to ${_portal.name} login')),
               const PopupMenuItem(value: 'paste-into-focused', child: Text('Paste into focused field')),
+              if (PortalRegistry.instance.all.length > 1)
+                const PopupMenuItem(value: 'switch-portal', child: Text('Switch portal…')),
               const PopupMenuDivider(),
 
-              const PopupMenuItem(value: 'forget-login', child: Text('Forget saved login')),
-              PopupMenuItem(
-                value: 'toggle-diagnostics',
-                child: Text(_showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'),
-              ),
+              // Scraping.
+              const PopupMenuItem(value: 'run-full-scrape', child: Text('Run full scrape now')),
+              const PopupMenuItem(value: 'refetch-everything', child: Text('Refetch everything (ignore cache)')),
               const PopupMenuItem(value: 'retry-failures', child: Text('Retry failed visits')),
               const PopupMenuDivider(),
-              PopupMenuItem(value: 'discover-messages', child: Text('Discover messages (${_portal.name})')),
-              const PopupMenuItem(value: 'test-fetch-one-message', child: Text('Test: fetch one message body')),
-              PopupMenuItem(value: 'fetch-all-message-bodies', child: Text('Fetch all message bodies (${_portal.name})')),
-              const PopupMenuDivider(),
-              const PopupMenuItem(value: 'test-fetch-one-lab', child: Text('Test: fetch one lab body')),
-              PopupMenuItem(value: 'fetch-all-lab-bodies', child: Text('Fetch all lab bodies (${_portal.name})')),
-              const PopupMenuDivider(),
-              PopupMenuItem(value: 'fetch-clinical-triad', child: Text('Fetch Allergies/Immunizations/Conditions (${_portal.name})')),
-              const PopupMenuDivider(),
+
+              // Toggles.
               PopupMenuItem(
                 value: 'toggle-auto-orchestrate',
                 child: Text(_autoOrchestrateOnSignIn
                     ? 'Disable auto-scrape on sign-in'
                     : 'Enable auto-scrape on sign-in'),
               ),
-              const PopupMenuItem(value: 'run-full-scrape', child: Text('Run full scrape now')),
-              const PopupMenuItem(value: 'refetch-everything', child: Text('Refetch everything (ignore cache)')),
-              const PopupMenuDivider(),
               PopupMenuItem(
                 value: 'toggle-auto-scout',
                 child: Text(_autoScoutOnSignIn
                     ? 'Disable auto-scout on sign-in'
                     : 'Enable auto-scout on sign-in'),
               ),
+              PopupMenuItem(
+                value: 'toggle-diagnostics',
+                child: Text(_showDiagnostics ? 'Hide diagnostics' : 'Show diagnostics'),
+              ),
+              const PopupMenuDivider(),
+
+              // Advanced.
               const PopupMenuItem(value: 'run-portal-scout', child: Text('Run portal scout now')),
+              const PopupMenuItem(value: 'forget-login', child: Text('Forget saved login')),
             ],
           ),
         ],
@@ -1256,6 +1253,59 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       await ctrl.loadUrl(
         urlRequest: URLRequest(url: WebUri(_portal.urls.login)));
       setState(() => _status = 'Returning to ${_portal.name} login…');
+    } else if (value == 'switch-portal') {
+      // Portal picker dialog. Persists choice via PortalRegistry
+      // (Keychain-backed), then reloads the WebView at the new
+      // portal's login URL. Any in-flight batch is a no-op precondition.
+      if (_batchRunning || _orchestratorRunning) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Finish or abort the current batch before switching portals.'),
+          duration: Duration(seconds: 3),
+        ));
+        return;
+      }
+      final current = _portal.id;
+      final picked = await showDialog<String>(
+        context: context,
+        builder: (dialogCtx) => SimpleDialog(
+          title: const Text('Switch portal'),
+          children: [
+            for (final p in PortalRegistry.instance.all)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(dialogCtx).pop(p.id),
+                child: Row(children: [
+                  Icon(
+                    p.id == current ? Icons.radio_button_checked : Icons.radio_button_off,
+                    color: p.id == current ? Colors.teal : Colors.grey,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(p.name, style: const TextStyle(fontWeight: FontWeight.w500)),
+                      Text(p.hosts.userFacing, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                    ],
+                  )),
+                ]),
+              ),
+          ],
+        ),
+      );
+      if (picked == null || picked == current) return;
+      await PortalRegistry.instance.setActive(picked);
+      // Reset per-session flags so the newly-active portal gets a
+      // fresh orchestrator + scout arm on its post-auth landing.
+      _orchestratorRanThisSession = false;
+      _scoutRanThisSession = false;
+      setState(() {
+        _status = 'Switched to ${_portal.name}. Log in when ready.';
+      });
+      final ctrl = _ctrl;
+      if (ctrl != null) {
+        await ctrl.loadUrl(
+          urlRequest: URLRequest(url: WebUri(_portal.urls.login)));
+      }
     } else if (value == 'paste-into-focused') {
       // Bypass WKWebView's paste block (Stanford's page swallows onpaste;
       // iOS Simulator's cross-clipboard sync is also unreliable). Reads

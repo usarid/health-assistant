@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart' show rootBundle, AssetManifest;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'portal_config.dart';
 export 'portal_config.dart';
@@ -7,11 +8,14 @@ export 'portal_config.dart';
 /// currently-active portal. Callers use PortalRegistry.instance.active
 /// wherever they used to reference StanfordConfig.X.
 ///
-/// R-1 behavior: the active portal is the first (or only) loaded portal.
-/// R-4 will add a persistent user-selected active portal when we ship a
-/// picker UI alongside ucsf.json.
+/// The active portal id is persisted to the iOS Keychain (via
+/// flutter_secure_storage, already used for credentials) so a user's
+/// picker choice survives app kill/relaunch — but not app reinstall,
+/// same as their saved credentials.
 class PortalRegistry {
   static PortalRegistry? _instance;
+  static const _activePortalKey = 'active_portal_id';
+  static const _storage = FlutterSecureStorage();
 
   final Map<String, PortalConfig> _byId;
   String _activeId;
@@ -30,7 +34,8 @@ class PortalRegistry {
   }
 
   /// One-shot init. Reads AssetManifest.json to discover
-  /// assets/portals/*.json, decodes each, and picks the first as active.
+  /// assets/portals/*.json, decodes each, and selects the active portal
+  /// (persisted from a prior session if valid, else alphabetically-first).
   /// Throws if no portal configs are shipped — that's a build error.
   static Future<PortalRegistry> load() async {
     final manifest = await AssetManifest.loadFromAssetBundle(rootBundle);
@@ -60,10 +65,22 @@ class PortalRegistry {
       byId[cfg.id] = cfg;
     }
 
-    // portalKeys is sorted; byId was populated in that order; Dart's
-    // default Map preserves insertion order → byId.keys.first is the
-    // alphabetically-first portal id. Deterministic default.
-    _instance = PortalRegistry._(byId, byId.keys.first);
+    // Prefer a persisted picker choice from a prior session. If the
+    // persisted id is unknown (portal was removed since), or nothing
+    // was persisted, fall back to the alphabetically-first portal.
+    String? persisted;
+    try {
+      persisted = await _storage.read(key: _activePortalKey);
+    } catch (_) {
+      // Keychain read can throw when entitlements aren't set up —
+      // that's task_b5685403 territory. Fall back silently.
+      persisted = null;
+    }
+    final activeId = (persisted != null && byId.containsKey(persisted))
+        ? persisted
+        : byId.keys.first;
+
+    _instance = PortalRegistry._(byId, activeId);
     return _instance!;
   }
 
@@ -78,12 +95,19 @@ class PortalRegistry {
     return [for (final id in ids) _byId[id]!];
   }
 
-  /// Set the active portal. Used by the picker UI once >1 portal exists.
-  /// Throws on unknown id.
-  void setActive(String portalId) {
+  /// Set the active portal + persist the choice for next launch.
+  /// Throws on unknown id. Keychain write failures are swallowed
+  /// (the in-memory switch still succeeds — the choice just won't
+  /// survive relaunch until the underlying entitlement is fixed).
+  Future<void> setActive(String portalId) async {
     if (!_byId.containsKey(portalId)) {
       throw ArgumentError('Unknown portal id: $portalId');
     }
     _activeId = portalId;
+    try {
+      await _storage.write(key: _activePortalKey, value: portalId);
+    } catch (_) {
+      // Same rationale as the read in load() — best-effort persistence.
+    }
   }
 }
