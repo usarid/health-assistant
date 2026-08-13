@@ -1758,6 +1758,101 @@ class ScrapeJobs {
   ///
   /// Result via callHandler('clinicalList', payload):
   ///   { section, ok, status, list, attempts, timings }
+  /// Fetch the Epic MyChart labs-list index via /api/test-results/GetList.
+  /// Extracts the flat list of result keys from newResults (which is
+  /// where the labs live — only ~20% of them appear inside
+  /// newResultGroups; the rest are ungrouped standalone entries).
+  ///
+  /// Emits via callHandler('labsList', payload):
+  ///   { portal, ok, status, keys: [...], count, error?, timings }
+  static String epicLabsList({required PortalConfig portal}) {
+    final apiHostJs      = _jsString(portal.hosts.api);
+    final basePathJs     = _jsString(portal.basePath);
+    final csrfInputJs    = _jsString(portal.auth.csrfInputName);
+    final csrfHeaderJs   = _jsString(portal.auth.csrfHeaderName);
+    final tokenCacheKey  = _jsString('__binaRVT_${portal.id}');
+    return '''
+(async () => {
+  const API_HOST     = $apiHostJs;
+  const BASE_PATH    = $basePathJs;
+  const CSRF_INPUT   = $csrfInputJs;
+  const CSRF_HEADER  = $csrfHeaderJs;
+  const TOKEN_CACHE  = $tokenCacheKey;
+  const t0 = Date.now();
+  const attempts = [];
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('labsList', payload);
+    }
+  }
+  function fail(error, extra) {
+    emit({ portal: '${portal.id}', ok: false, error, attempts,
+           timings: { totalMs: Date.now() - t0 }, ...(extra || {}) });
+  }
+
+  // CSRF token (same shell-scrape pattern as epicClinicalLoadList).
+  let token = window[TOKEN_CACHE];
+  if (!token) {
+    const tT = Date.now();
+    const shellUrl = 'https://' + API_HOST + BASE_PATH + '/Clinical/Allergies/Index?lang=en-US';
+    try {
+      const shellResp = await fetch(shellUrl, { credentials: 'include', headers: { 'Accept': 'text/html' } });
+      const shellHtml = await shellResp.text();
+      attempts.push({ step: 'shell-fetch', status: shellResp.status, htmlLength: shellHtml.length, elapsedMs: Date.now() - tT });
+      const tokenRegex = new RegExp('name="' + CSRF_INPUT + '"[^>]*value="([^"]+)"');
+      const m = shellHtml.match(tokenRegex);
+      if (m) { token = m[1]; window[TOKEN_CACHE] = token; }
+    } catch (e) {
+      return fail('shell-fetch-failed', { message: (e && e.message) || String(e) });
+    }
+  } else {
+    attempts.push({ step: 'shell-cached', tokenLen: token.length });
+  }
+  if (!token) return fail('no-csrf-token');
+
+  const url = 'https://' + API_HOST + BASE_PATH + '/api/test-results/GetList';
+  const tL = Date.now();
+  let resp;
+  try {
+    const headers = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
+    };
+    headers[CSRF_HEADER] = token;
+    resp = await fetch(url, {
+      method: 'POST', credentials: 'include', headers, body: '',
+    });
+  } catch (e) {
+    return fail('list-fetch-failed', { message: (e && e.message) || String(e) });
+  }
+  const text = await resp.text();
+  attempts.push({ step: 'getlist', url, status: resp.status, ok: resp.ok, respLength: text.length, elapsedMs: Date.now() - tL });
+  if (!resp.ok) return fail('list-non-ok', { status: resp.status });
+
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (e) { return fail('list-json-parse-failed', { message: (e && e.message) || String(e), respPreview: text.slice(0, 200) }); }
+
+  const newResults = parsed.newResults || {};
+  // Keys carry an optional trailing '^' — strip so they can feed straight
+  // into GetDetails (which wants the URL-decoded raw key).
+  const keys = Object.keys(newResults).map(k => k.replace(/\\^\$/, ''));
+
+  emit({
+    portal: '${portal.id}',
+    ok: true,
+    status: resp.status,
+    keys,
+    count: keys.length,
+    attempts,
+    timings: { totalMs: Date.now() - t0 },
+  });
+})();
+''';
+  }
+
   /// Endpoint probe — fetches a batch of GET/POST-able Epic MyChart URLs
   /// from a portal and emits the raw responses (first 20 KB per response)
   /// via callHandler('probeCapture', payload). No parsing, no per-item

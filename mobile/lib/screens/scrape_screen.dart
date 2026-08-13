@@ -280,6 +280,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                   handlerName: 'probeCapture',
                   callback: _onProbeCaptureHandler,
                 );
+                c.addJavaScriptHandler(
+                  handlerName: 'labsList',
+                  callback: _onLabsListHandler,
+                );
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
@@ -432,6 +436,16 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final m = Map<String, dynamic>.from(args.first as Map);
     if (_probeCaptureCompleter != null && !_probeCaptureCompleter!.isCompleted) {
       _probeCaptureCompleter!.complete(m);
+    }
+    return {'ok': true};
+  }
+
+  Completer<Map<String, dynamic>>? _labsListCompleter;
+  Future<dynamic> _onLabsListHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_labsListCompleter != null && !_labsListCompleter!.isCompleted) {
+      _labsListCompleter!.complete(m);
     }
     return {'ok': true};
   }
@@ -703,6 +717,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       // Portal-agnostic (proven for stanford + ucsf).
       ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
     ];
+    if (_portal.id == 'ucsf') {
+      // UCSF's labs use live GetList discovery + per-key GetDetails
+      // (no bundled asset like Stanford's stanford-lab-orders.json).
+      tasks.insert(0, ('Lab bodies ($portalTag) — live discovery', _fetchLabsFullBatch));
+    }
     if (_portal.id == 'stanford') {
       // Stanford-only until each is ported per portal:
       tasks.insertAll(0, [
@@ -940,6 +959,146 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _status = 'Probe failed: $e');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
+  /// UCSF (and any Epic MyChart without a pre-populated lab-orders
+  /// asset) labs fetch: hit /api/test-results/GetList to discover the
+  /// keys live, then loop calling epicLabDetail per key. Each
+  /// GetDetails response lands via the existing labDetail handler
+  /// wiring (LocalWriter.writeLabBody portal-scopes the filename).
+  ///
+  /// Runs uncapped — no bundled asset, no reason to stop short.
+  /// Incremental cache (LocalWriter.hasLabBody) skips per-key on-disk.
+  Future<void> _fetchLabsFullBatch() async {
+    if (_ctrl == null || !_onSignedInPage) return;
+    if (_batchRunning) return;
+
+    setState(() {
+      _batchRunning = true;
+      _abortRequested = false;
+      _status = 'Discovering ${_portal.name} labs list…';
+    });
+
+    // Step 1: discover the flat list of result keys.
+    List<String> keys;
+    Map<String, dynamic>? rawRes;
+    try {
+      _labsListCompleter = Completer<Map<String, dynamic>>();
+      await _ctrl!.evaluateJavascript(
+          source: ScrapeJobs.epicLabsList(portal: _portal));
+      rawRes = await _labsListCompleter!.future
+          .timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      rawRes = {'ok': false, 'error': 'timeout-30s'};
+    } catch (e) {
+      rawRes = {'ok': false, 'error': 'inject-failed:$e'};
+    }
+
+    // Always write the labs-list result to disk so we can debug failures
+    // even after the pipeline moves on. Writes to
+    // Documents/clinical/<portal>-labs-list-<ts>.json.
+    await LocalWriter.writeClinicalList(
+      portalId: _portal.id,
+      section: 'labs-list',
+      listJson: rawRes,
+    );
+
+    if (rawRes!['ok'] != true) {
+      if (!mounted) return;
+      setState(() => _status = 'Labs list failed: ${rawRes!['error']} — see clinical/${_portal.id}-labs-list-*.json');
+      setState(() => _batchRunning = false);
+      return;
+    }
+    final raw = (rawRes['keys'] as List?) ?? const [];
+    keys = raw.whereType<String>().toList();
+
+    if (keys.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _status = 'Labs list returned zero keys — see clinical/${_portal.id}-labs-list-*.json';
+        _batchRunning = false;
+      });
+      return;
+    }
+
+    // Step 2: iterate keys, calling GetDetails per one. Same wiring
+    // as _fetchAllLabBodies but sourced live rather than from a
+    // bundled asset.
+    setState(() {
+      _batchTotal = keys.length;
+      _batchIndex = 0;
+      _batchStartedAt = DateTime.now();
+      _status = 'Fetching ${keys.length} ${_portal.name} lab details…';
+    });
+
+    final captured = <Map<String, dynamic>>[];
+    final errors = <Map<String, dynamic>>[];
+    int skipped = 0;
+
+    try {
+      for (int i = 0; i < keys.length; i++) {
+        if (_abortRequested) {
+          setState(() => _status = 'Aborted at $i/${keys.length}');
+          break;
+        }
+        final eorderid = keys[i];
+        if (_incrementalScrape &&
+            await LocalWriter.hasLabBody(portalId: _portal.id, eorderid: eorderid)) {
+          skipped++;
+          continue;
+        }
+        setState(() {
+          _batchIndex = i + 1;
+          _status = 'Lab $_batchIndex/$_batchTotal — '
+              '${captured.length} captured, ${errors.length} errors, $skipped skipped';
+        });
+
+        _labDetailCompleter = Completer<Map<String, dynamic>>();
+        try {
+          await _ctrl!.evaluateJavascript(
+              source: ScrapeJobs.epicLabDetail(
+                  portal: _portal, eorderid: eorderid));
+        } catch (e) {
+          errors.add({'eorderid': eorderid, 'reason': 'inject-failed:$e'});
+          continue;
+        }
+        Map<String, dynamic> result;
+        try {
+          result = await _labDetailCompleter!.future
+              .timeout(const Duration(seconds: 20));
+        } on TimeoutException {
+          errors.add({'eorderid': eorderid, 'reason': 'fetch-timeout'});
+          continue;
+        }
+
+        if (result['ok'] != true) {
+          errors.add({
+            'eorderid': eorderid,
+            'reason': result['error']?.toString() ?? 'unknown',
+          });
+          continue;
+        }
+
+        try {
+          await LocalWriter.writeLabBody(
+              portalId: _portal.id, eorderid: eorderid, details: result['details']);
+          captured.add({'eorderid': eorderid});
+        } catch (e) {
+          errors.add({'eorderid': eorderid, 'reason': 'write-failed:$e'});
+        }
+      }
+      await LocalWriter.writeLabBatchConsolidated(
+        portalId: _portal.id,
+        captured: captured,
+        errors: errors,
+        startedAt: _batchStartedAt!,
+        finishedAt: DateTime.now(),
+      );
+      setState(() => _status = 'Labs done: ${captured.length} captured, '
+          '${errors.length} errors, $skipped skipped');
     } finally {
       setState(() => _batchRunning = false);
     }
