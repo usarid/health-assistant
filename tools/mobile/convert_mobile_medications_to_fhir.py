@@ -282,7 +282,20 @@ def main():
         sys.exit(1)
     print(f'Reading {f.name}')
     d = json.load(open(f))
-    cms = (d.get('list') or {}).get('CommunityMembers') or []
+    # Two shapes seen so far:
+    #  - Stanford's embedded-JS blob: {CommunityMembers: [{Organization,
+    #    PrescriptionList: {Prescriptions: []}}, ...]}
+    #  - UCSF /Clinical/Medications/LoadExternal: [{Organization,
+    #    PrescriptionList: {Prescriptions: []}}, ...] — same inner
+    #    structure, no CommunityMembers wrapper.
+    # Normalize both to a list of org-buckets.
+    body = d.get('list')
+    if isinstance(body, dict):
+        cms = body.get('CommunityMembers') or []
+    elif isinstance(body, list):
+        cms = body
+    else:
+        cms = []
     stats = Counter()
     entries = []
     for cm in cms:
