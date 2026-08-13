@@ -21,8 +21,8 @@
   "urls": {
     "login": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Authentication/Login?postloginurl=Home",
     "signedInHome": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Home/Index",
-    "_signedInMarker_comment": "'/UCSFMyChart/inside' is a common Epic post-auth path segment (best guess); R-5 will verify against the real signed-in URL.",
-    "signedInMarker": "/UCSFMyChart/inside",
+    "_signedInMarker_comment": "UCSF lands users on /UCSFMyChart/Home after MFA (verified 2026-08-13 via live login). Broader alternatives like /UCSFMyChart/ would also match the login page (Authentication/Login).",
+    "signedInMarker": "/UCSFMyChart/Home",
     "visitDetailPattern": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=visitdetails&csn=%CSN%",
     "messageInbox": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=messagecenter",
     "messageOutbox": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=messagecenter&folder=sent",
