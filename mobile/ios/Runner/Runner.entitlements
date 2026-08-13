@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Keychain access group for flutter_secure_storage.
+         Without this, CredentialsStore.save/read throw
+         errSecMissingEntitlement (-34018) on iOS Simulator and the
+         "Save login?" flow silently no-ops. AppIdentifierPrefix
+         resolves to the team prefix at build time. -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.binahealth.binaMobile</string>
+    </array>
+</dict>
+</plist>

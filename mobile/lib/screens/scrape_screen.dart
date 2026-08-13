@@ -3,7 +3,7 @@ import 'dart:collection' show Queue, UnmodifiableListView;
 import 'dart:convert';
 import 'dart:math' show Random;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show rootBundle, Clipboard;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../portal/portal_registry.dart';
 import '../scrape/scrape_jobs.dart';
@@ -162,6 +162,9 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                     : 'Enable auto-scout on sign-in'),
               ),
               const PopupMenuItem(value: 'run-portal-scout', child: Text('Run portal scout now')),
+              const PopupMenuDivider(),
+              PopupMenuItem(value: 'go-to-login', child: Text('Go to ${_portal.name} login')),
+              const PopupMenuItem(value: 'paste-into-focused', child: Text('Paste into focused field')),
             ],
           ),
         ],
@@ -1241,6 +1244,63 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       _scoutAutoRepollTimer?.cancel(); _scoutAutoRepollTimer = null;
       _scoutRanThisSession = false; // allow manual re-trigger
       await _runPortalScout();
+    } else if (value == 'go-to-login') {
+      // Recover from a stray tap that navigated the WebView off the
+      // portal's login/home page. Loads _portal.urls.login fresh.
+      final ctrl = _ctrl;
+      if (ctrl == null) return;
+      await ctrl.loadUrl(
+        urlRequest: URLRequest(url: WebUri(_portal.urls.login)));
+      setState(() => _status = 'Returning to ${_portal.name} login…');
+    } else if (value == 'paste-into-focused') {
+      // Bypass WKWebView's paste block (Stanford's page swallows onpaste;
+      // iOS Simulator's cross-clipboard sync is also unreliable). Reads
+      // the Flutter clipboard directly and JS-injects the value into
+      // whatever input/textarea/contenteditable is currently focused,
+      // using the React-safe setter path from loginAutofillAndCapture.
+      final ctrl = _ctrl;
+      if (ctrl == null) return;
+      final data = await Clipboard.getData('text/plain');
+      final text = data?.text;
+      if (text == null || text.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Clipboard is empty.'),
+          duration: Duration(seconds: 2),
+        ));
+        return;
+      }
+      final textJs = jsonEncode(text);
+      final result = await ctrl.evaluateJavascript(source: '''
+        (() => {
+          const el = document.activeElement;
+          if (!el) return { ok: false, reason: 'no-active-element' };
+          const tag = el.tagName;
+          if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !el.isContentEditable) {
+            return { ok: false, reason: 'not-editable', tag };
+          }
+          const val = $textJs;
+          if (el.isContentEditable) {
+            el.innerText = val;
+          } else {
+            const proto = tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            setter.call(el, val);
+          }
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return { ok: true, tag, len: val.length };
+        })();
+      ''');
+      if (!mounted) return;
+      final r = (result is Map) ? Map<String, dynamic>.from(result) : {'ok': false, 'reason': 'no-result'};
+      final msg = r['ok'] == true
+          ? 'Pasted ${r['len']} chars into <${(r['tag'] as String?)?.toLowerCase()}>'
+          : 'Paste failed: ${r['reason'] ?? 'unknown'}';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(msg),
+        duration: const Duration(seconds: 3),
+      ));
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
