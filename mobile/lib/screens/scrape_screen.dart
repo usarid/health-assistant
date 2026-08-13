@@ -142,6 +142,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               if (PortalRegistry.instance.all.length > 1)
                 const PopupMenuItem(value: 'switch-portal', child: Text('Switch portal…')),
               const PopupMenuItem(value: 'probe-endpoints', child: Text('Probe UCSF endpoints')),
+              const PopupMenuItem(value: 'xhr-capture-toggle', child: Text('XHR capture: enable/dump')),
+              const PopupMenuItem(value: 'reset-webview-state', child: Text('Reset WebView state (keep session)')),
+              if (_portal.id == 'ucsf')
+                const PopupMenuItem(value: 'go-ucsf-messaging', child: Text('Force-load UCSF Messaging')),
               const PopupMenuDivider(),
 
               // Scraping.
@@ -287,7 +291,13 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               },
               onLoadStop: (c, url) async {
                 final urlStr = url?.toString() ?? '';
-                final onSignedIn = urlStr.contains(_portal.urls.signedInMarker);
+                // signedInMarker for UCSF is broad ('/UCSFMyChart/') so
+                // it also matches the Authentication/Login and logout
+                // pages — filter those out so we don't flag "Logged in"
+                // on a page that shows "You have been logged out".
+                final markerHit = urlStr.contains(_portal.urls.signedInMarker);
+                final onAuthPage = urlStr.contains('/Authentication/');
+                final onSignedIn = markerHit && !onAuthPage;
                 setState(() {
                   _currentUrl = urlStr;
                   _onSignedInPage = onSignedIn;
@@ -911,14 +921,28 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         {'name': 'testResultsGetList_extern',  'method': 'POST', 'path': '/api/test-results/GetList', 'body': '{"includeExternal":true}'},
         {'name': 'testResultsGetCommunityInfo','method':'POST', 'path': '/api/test-results/GetCommunityInfo',     'body': ''},
 
-        // Conversations (messages) — GetConversationList 500s without body.
-        // From GetFoldersList we know folders have `tag` values (1..6);
-        // typical Epic uses {folder: tag}. Try tag=1 first (usually inbox).
+        // Conversations (messages) — GetConversationList 500s across
+        // {folder:1}, {folderTag:1}, {} (previous probe). Wider net now:
+        // - foldersList response used field `tag` (integer); try that
+        //   name specifically
+        // - try both integer and string, various field casings
+        // - try pagination + selectedFolder shapes Epic sometimes uses
+        // - try GET (with query string) as fallback
         {'name': 'conversationsGetFoldersList','method':'POST', 'path': '/api/conversations/GetFoldersList',      'body': ''},
         {'name': 'conversationsGetOrganizations','method':'POST','path':'/api/conversations/GetOrganizations',    'body': ''},
-        {'name': 'conversationsList_tag1',     'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folder":1}'},
-        {'name': 'conversationsList_folder1',  'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folderTag":1}'},
-        {'name': 'conversationsList_empty',    'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{}'},
+        {'name': 'convList_tag_int',           'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"tag":1}'},
+        {'name': 'convList_tag_str',           'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"tag":"1"}'},
+        {'name': 'convList_folderId',          'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folderId":1}'},
+        {'name': 'convList_folderType',        'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folderType":1}'},
+        {'name': 'convList_selectedFolder',    'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"selectedFolder":1}'},
+        {'name': 'convList_pascal_Folder',     'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"Folder":1}'},
+        {'name': 'convList_pascal_FolderTag',  'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"FolderTag":1}'},
+        {'name': 'convList_tags_array',        'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"tags":[1]}'},
+        {'name': 'convList_folder_paged',      'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folder":1,"pageNumber":0,"pageSize":20}'},
+        {'name': 'convList_folder_offset',     'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folder":1,"offset":0,"limit":20}'},
+        {'name': 'convList_qs_tag_get',        'method':'GET',  'path': '/api/conversations/GetConversationList?tag=1', 'body': ''},
+        {'name': 'convList_qs_tag_post',       'method':'POST', 'path': '/api/conversations/GetConversationList?tag=1', 'body': '{}'},
+        {'name': 'convList_qs_folder_post',    'method':'POST', 'path': '/api/conversations/GetConversationList?folder=1', 'body': '{}'},
       ];
       await _ctrl!.evaluateJavascript(
         source: ScrapeJobs.epicProbeEndpoints(portal: _portal, probes: probes));
@@ -1658,6 +1682,79 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       ));
     } else if (value == 'probe-endpoints') {
       await _probeUcsfEndpoints();
+    } else if (value == 'go-ucsf-messaging') {
+      final ctrl = _ctrl;
+      if (ctrl == null) return;
+      await ctrl.loadUrl(urlRequest: URLRequest(
+        url: WebUri('https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Messaging')));
+      setState(() => _status = 'Force-loading UCSF Messaging…');
+    } else if (value == 'reset-webview-state') {
+      // Clear localStorage + sessionStorage (which is where our
+      // api-capture flags + accumulated records live) and reload the
+      // current URL. Session cookies survive because they live outside
+      // web storage. Fixes wedged-SPA cases caused by stale portalscout
+      // flags or overgrown record buffers.
+      final ctrl = _ctrl;
+      if (ctrl == null) return;
+      try {
+        await ctrl.evaluateJavascript(source: '''
+          try { localStorage.clear(); } catch (e) {}
+          try { sessionStorage.clear(); } catch (e) {}
+          location.reload();
+        ''');
+      } catch (_) {}
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Cleared web storage + reloaded. Session cookies preserved.'),
+        duration: Duration(seconds: 3),
+      ));
+    } else if (value == 'xhr-capture-toggle') {
+      // Two-step interaction: first tap arms the capture and clears
+      // any prior records; user then navigates the WebView (e.g. clicks
+      // Messages → Inbox); second tap disarms and dumps captured
+      // XHRs to disk for analysis.
+      final ctrl = _ctrl;
+      if (ctrl == null) return;
+      final rawState = await ctrl.evaluateJavascript(source: '''
+        (() => {
+          // api-capture hook (bootstrapForUserScript) checks
+          // localStorage['portalscout.active'] === '1' — not 'true'.
+          // Match that exact convention.
+          const wasActive = localStorage.getItem('portalscout.active') === '1';
+          if (!wasActive) {
+            localStorage.setItem('portalscout.active','1');
+            localStorage.setItem('portalscout.records','[]');
+            return JSON.stringify({armed: true});
+          }
+          localStorage.setItem('portalscout.active','0');
+          const raw = localStorage.getItem('portalscout.records') || '[]';
+          return JSON.stringify({armed: false, records: JSON.parse(raw)});
+        })();
+      ''');
+      final s = (rawState is String) ? rawState : rawState?.toString() ?? '{}';
+      final decoded = jsonDecode(s) is String ? jsonDecode(jsonDecode(s)) : jsonDecode(s);
+      final m = Map<String, dynamic>.from(decoded as Map);
+      if (m['armed'] == true) {
+        setState(() => _status = 'XHR capture ARMED. Navigate to trigger requests, then tap this menu again to dump.');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Armed. Interact in the WebView, then tap "XHR capture: enable/dump" again to save.'),
+          duration: Duration(seconds: 4),
+        ));
+      } else {
+        final records = (m['records'] as List?) ?? const [];
+        final path = await LocalWriter.writeClinicalList(
+          portalId: _portal.id,
+          section: 'xhr-capture',
+          listJson: {'records': records, 'capturedAt': DateTime.now().toIso8601String()},
+        );
+        setState(() => _status = 'XHR capture disarmed. ${records.length} records → $path');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Dumped ${records.length} XHR records to disk.'),
+          duration: const Duration(seconds: 3),
+        ));
+      }
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
