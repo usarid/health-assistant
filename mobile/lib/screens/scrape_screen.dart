@@ -539,18 +539,22 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         JSON.stringify({
           url: location.href,
           hasPasswordInput: !!document.querySelector('input[type="password"]:not([disabled])'),
-          hasLogout: /\blogout\b|\bsign\s*out\b/i.test(
-            (document.body && document.body.innerText || '').slice(0, 8000)),
+          // URL is the primary signed-in signal (checked Dart-side
+          // against _portal.urls.signedInMarker). No DOM logout probe —
+          // that was Stanford-flavored guesswork that broke on UCSF's
+          // avatar-menu-hidden logout. hasPasswordInput above is the
+          // one remaining DOM defense: catches SPA route-bounces where
+          // the URL says signed-in but the login form is momentarily
+          // still rendered.
           bodyHead: (document.body && document.body.innerText || '')
             .replace(/\s+/g, ' ').slice(0, 200),
         })
       ''');
       final probe = jsonDecode(probeRaw?.toString() ?? '{}');
       final hasPw     = probe['hasPasswordInput'] == true;
-      final hasLogout = probe['hasLogout'] == true;
       final liveUrl   = (probe['url'] ?? '').toString();
       final onSigned  = liveUrl.contains(_portal.urls.signedInMarker);
-      if (onSigned && !hasPw && hasLogout) {
+      if (onSigned && !hasPw) {
         _scoutAutoRepollTimer?.cancel();
         _scoutAutoRepollTimer = null;
         _scoutRanThisSession = true;
@@ -558,7 +562,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         return;
       }
       final pathOnly = Uri.tryParse(liveUrl)?.path ?? liveUrl;
-      setState(() => _status = 'Auto-scout deferred (pw=$hasPw logout=$hasLogout '
+      setState(() => _status = 'Auto-scout deferred (pw=$hasPw '
           'url=$pathOnly) — will re-check in ${_scoutAutoRepollWait.inSeconds}s');
       // Re-poll loop: keep checking the page state at a slower cadence
       // until the user is genuinely signed in. Cancelled by next
@@ -608,16 +612,20 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         JSON.stringify({
           url: location.href,
           hasPasswordInput: !!document.querySelector('input[type="password"]:not([disabled])'),
-          hasLogout: /\blogout\b|\bsign\s*out\b/i.test(
-            (document.body && document.body.innerText || '').slice(0, 8000)),
+          // URL is the primary signed-in signal (checked Dart-side
+          // against _portal.urls.signedInMarker). No DOM logout probe —
+          // that was Stanford-flavored guesswork that broke on UCSF's
+          // avatar-menu-hidden logout. hasPasswordInput above is the
+          // one remaining DOM defense: catches SPA route-bounces where
+          // the URL says signed-in but the login form is momentarily
+          // still rendered.
         })
       ''');
       final probe = jsonDecode(probeRaw?.toString() ?? '{}');
       final hasPw     = probe['hasPasswordInput'] == true;
-      final hasLogout = probe['hasLogout'] == true;
       final liveUrl   = (probe['url'] ?? '').toString();
       final onSigned  = liveUrl.contains(_portal.urls.signedInMarker);
-      if (onSigned && !hasPw && hasLogout) {
+      if (onSigned && !hasPw) {
         _orchestratorAutoRepollTimer?.cancel();
         _orchestratorAutoRepollTimer = null;
         _orchestratorRanThisSession = true;
@@ -625,7 +633,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         return;
       }
       final pathOnly = Uri.tryParse(liveUrl)?.path ?? liveUrl;
-      setState(() => _status = 'Auto-scrape deferred (pw=$hasPw logout=$hasLogout '
+      setState(() => _status = 'Auto-scrape deferred (pw=$hasPw '
           'url=$pathOnly) — will re-check in ${_scoutAutoRepollWait.inSeconds}s');
       _orchestratorAutoRepollTimer?.cancel();
       _orchestratorAutoRepollTimer = Timer(_scoutAutoRepollWait, () {
