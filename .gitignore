@@ -86,3 +86,7 @@ mobile/assets/*
 
 # ── Portal ingest config (private per-portal FHIR refs) ──
 tools/portal_ingest_config.json
+
+# Local scratchpad / analysis files — may contain raw portal responses (PHI).
+scratchpad-*.json
+scratchpad/
