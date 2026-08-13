@@ -480,7 +480,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       stamped['csn'] = _currentCsn;
       stamped['batchIndex'] = _batchIndex;
       // Fire-and-forget — never block JS callback on file IO
-      LocalWriter.appendDiagLine(_batchStartedAt!, stamped);
+      LocalWriter.appendDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event: stamped);
     }
     if (!_showDiagnostics) return {'ok': true};
     // Compact one-liner — order key fields by stage so the most relevant
@@ -755,11 +755,11 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         return;
       }
       if (result['ok'] == true && result['list'] != null) {
-        final path = await LocalWriter.writeClinicalList('Medications', result['list']);
+        final path = await LocalWriter.writeClinicalList(portalId: _portal.id, section: 'Medications', listJson: result['list']);
         setState(() => _status = 'Medications: OK → $path');
       } else {
         // Persist failure envelope for diagnostics.
-        await LocalWriter.writeClinicalList('Medications-failed', result);
+        await LocalWriter.writeClinicalList(portalId: _portal.id, section: 'Medications-failed', listJson: result);
         setState(() => _status = 'Medications: failed (${result['error'] ?? 'unknown'})');
       }
     } catch (e) {
@@ -816,7 +816,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           continue;
         }
         if (result['ok'] == true && result['list'] != null) {
-          await LocalWriter.writeClinicalList(section, result['list']);
+          await LocalWriter.writeClinicalList(portalId: _portal.id, section: section, listJson: result['list']);
         }
       }
       setState(() => _status = 'Orion endpoints done.');
@@ -880,12 +880,12 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         }
         results[section] = result;
         if (result['ok'] == true && result['list'] != null) {
-          await LocalWriter.writeClinicalList(section, result['list']);
+          await LocalWriter.writeClinicalList(portalId: _portal.id, section: section, listJson: result['list']);
         } else {
           // Persist the failure envelope (error name, HTTP status, attempts)
           // so we can debug from disk without re-running. Landed at
           // Documents/clinical/stanford-<section>-failed-<ts>.json.
-          await LocalWriter.writeClinicalList('$section-failed', result);
+          await LocalWriter.writeClinicalList(portalId: _portal.id, section: '$section-failed', listJson: result);
         }
       }
       final okCount = results.values.where((r) => r['ok'] == true).length;
@@ -941,13 +941,13 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         })
       ''');
       final probe = jsonDecode(probeRaw?.toString() ?? '{}');
-      await LocalWriter.appendScoutDiagLine(_batchStartedAt!,
+      await LocalWriter.appendScoutDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event:
           {'phase': 'probe', ...Map<String, dynamic>.from(probe)});
       if (probe['installed'] != true || probe['hasEnumerate'] != true) {
         // Fallback: explicit injection of the bootstrap into the top frame.
         // (Subframes still need the UserScript path; if it didn't fire,
         // cross-frame enumeration will be limited.)
-        await LocalWriter.appendScoutDiagLine(_batchStartedAt!,
+        await LocalWriter.appendScoutDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event:
             {'phase': 'bootstrap-fallback', 'reason': 'UserScript not detected'});
         await _ctrl!.evaluateJavascript(source: ScrapeJobs.bootstrapForUserScript());
       }
@@ -991,7 +991,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         _status = 'Scout: ${clinical.length} sections + $itemCount items '
             'in $frames frames (${allLinks.length} candidates)';
       });
-      await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+      await LocalWriter.appendScoutDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event: {
         'phase': 'enumerated',
         'framesResponded': frames,
         'totalCandidates': allLinks.length,
@@ -1006,7 +1006,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       // If enumeration came back empty, write a "what was on the page"
       // snapshot to the spec so we can debug without a re-run.
       if (clinical.isEmpty) {
-        await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+        await LocalWriter.appendScoutDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event: {
           'phase': 'no-clinical-links',
           'allCandidates': allLinks.take(30).toList(),
         });
@@ -1017,7 +1017,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       final visitable = clinical.where((l) => l['href'] != null).toList();
       final clickOnly = clinical.where((l) => l['href'] == null).toList();
       if (clickOnly.isNotEmpty) {
-        await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+        await LocalWriter.appendScoutDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event: {
           'phase': 'click-only-skipped',
           'count': clickOnly.length,
           'sample': clickOnly.take(10).map((l) => {
@@ -1124,7 +1124,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           } catch (_) { /* keep going */ }
         }
 
-        await LocalWriter.appendScoutDiagLine(_batchStartedAt!, {
+        await LocalWriter.appendScoutDiagLine(portalId: _portal.id, batchStartedAt: _batchStartedAt!, event: {
           'phase': 'visited',
           'visitNum': visitNum,
           'depth': depth,
@@ -1170,8 +1170,9 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     } catch (e) {
       setState(() => _status = 'Scout failed: $e');
       await LocalWriter.appendScoutDiagLine(
-        _batchStartedAt ?? DateTime.now(),
-        {'phase': 'error', 'message': e.toString()},
+        portalId: _portal.id,
+        batchStartedAt: _batchStartedAt ?? DateTime.now(),
+        event: {'phase': 'error', 'message': e.toString()},
       );
     } finally {
       setState(() => _batchRunning = false);
@@ -1385,7 +1386,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
       // visits that captured some sub-notes but missed others.
-      final failed = await LocalWriter.findIncompleteCsns();
+      final failed = await LocalWriter.findIncompleteCsns(portalId: _portal.id);
       if (!mounted) return;
       if (failed.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -1540,7 +1541,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         final csn = csns[i];
         _currentCsn = csn;
         setState(() => _batchIndex = i + 1);
-        await LocalWriter.writeBatchManifest(BatchManifest(
+        await LocalWriter.writeBatchManifest(portalId: _portal.id, m: BatchManifest(
           startedAt: _batchStartedAt!,
           totalCount: csns.length,
           currentIndex: i,
@@ -1593,7 +1594,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               capturedAt: DateTime.now(),
               subNotes: subs,
             ));
-            await LocalWriter.writeMultiNote(csn, subs);
+            await LocalWriter.writeMultiNote(portalId: _portal.id, csn: csn, notes: subs);
           } else {
             final plain = html.replaceAll(RegExp(r'<[^>]+>'), '').trim();
             _captured.add(CapturedNote(
@@ -1603,7 +1604,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               visibleTextLength: plain.length,
               capturedAt: DateTime.now(),
             ));
-            await LocalWriter.writeNote(csn, html);
+            await LocalWriter.writeNote(portalId: _portal.id, csn: csn, html: html);
           }
         }
 
@@ -1617,6 +1618,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
       final finishedAt = DateTime.now();
       final path = await LocalWriter.writeConsolidated(
+        portalId: _portal.id,
         captured: _captured,
         errors: _errors,
         startedAt: _batchStartedAt!,
@@ -1812,6 +1814,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
       final finishedAt = DateTime.now();
       final path = await LocalWriter.writeMessagesDiscovery(
+        portalId: _portal.id,
         startedAt: startedAt,
         finishedAt: finishedAt,
         rows: allRows,
@@ -1836,7 +1839,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     if (_batchRunning) return;
 
     // Pull the most recent discovery file from disk
-    final pick = await LocalWriter.firstMessageRowFromLatestDiscovery();
+    final pick = await LocalWriter.firstMessageRowFromLatestDiscovery(portalId: _portal.id);
     if (pick == null) {
       setState(() => _status = 'No message discovery file found — run '
           '"Discover messages" first.');
@@ -1872,7 +1875,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         setState(() => _status = 'Test fetch timed out (30s).');
         return;
       }
-      final path = await LocalWriter.writeMessageTestFetch(result);
+      final path = await LocalWriter.writeMessageTestFetch(portalId: _portal.id, result: result);
       final ok = result['ok'] == true;
       final endpoint = result['endpoint']?.toString() ?? '(none worked)';
       setState(() => _status = 'Test fetch ${ok ? "OK" : "FAILED"} — '
@@ -1920,7 +1923,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         setState(() => _status = 'Test fetch timed out (30s).');
         return;
       }
-      final path = await LocalWriter.writeLabTestFetch(result);
+      final path = await LocalWriter.writeLabTestFetch(portalId: _portal.id, result: result);
       final ok = result['ok'] == true;
       final details = result['details'];
       final hasBody = details is Map &&
@@ -1973,7 +1976,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         // 489-lab pass takes 2.5min for zero new data. Menu toggle
         // "Refetch everything" flips _incrementalScrape off for a full
         // re-pull (e.g., after an addendum).
-        if (_incrementalScrape && await LocalWriter.hasLabBody(eorderid)) {
+        if (_incrementalScrape && await LocalWriter.hasLabBody(portalId: _portal.id, eorderid: eorderid)) {
           skipped++;
           continue;
         }
@@ -2021,7 +2024,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           'resultCount': (resultsList is List) ? resultsList.length : 0,
           'capturedAt': DateTime.now().toUtc().toIso8601String(),
         });
-        await LocalWriter.writeLabBody(eorderid, details);
+        await LocalWriter.writeLabBody(portalId: _portal.id, eorderid: eorderid, details: details);
         // Light pacing — GetDetails is ~4KB JSON; ~150-300ms is plenty
         if (i + 1 < orders.length) {
           final pauseMs = 200 + rng.nextInt(300);
@@ -2030,6 +2033,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
       }
       final finishedAt = DateTime.now();
       final path = await LocalWriter.writeLabBatchConsolidated(
+        portalId: _portal.id,
         captured: captured,
         errors: errors,
         startedAt: _batchStartedAt!,
@@ -2065,7 +2069,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     if (_ctrl == null || !_onSignedInPage) return;
     if (_batchRunning) return;
 
-    final ids = await LocalWriter.allMessageRowsFromLatestDiscovery();
+    final ids = await LocalWriter.allMessageRowsFromLatestDiscovery(portalId: _portal.id);
     if (ids.isEmpty) {
       setState(() => _status = 'No discovery rows — run "Discover messages" first.');
       return;
@@ -2096,7 +2100,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         // Skip-if-on-disk (incremental scrape). Message bodies are
         // immutable at Stanford once sent; ~752 msgs × ~180ms = 2+ min
         // wasted on a no-op re-pull.
-        if (_incrementalScrape && await LocalWriter.hasMessageBody(folder, id)) {
+        if (_incrementalScrape && await LocalWriter.hasMessageBody(portalId: _portal.id, folder: folder, msgId: id)) {
           skipped++;
           continue;
         }
@@ -2105,7 +2109,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           _status = 'Fetching $folder/$id  ($_batchIndex/$_batchTotal '
               '— ${captured.length} captured, ${errors.length} errors, $skipped skipped)';
         });
-        await LocalWriter.writeMessageBatchManifest(MessageBatchManifest(
+        await LocalWriter.writeMessageBatchManifest(portalId: _portal.id, m: MessageBatchManifest(
           startedAt: _batchStartedAt!,
           totalCount: ids.length,
           currentIndex: i,
@@ -2142,7 +2146,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
           continue;
         }
         captured.add(result);
-        await LocalWriter.writeMessageBody(folder, id, result);
+        await LocalWriter.writeMessageBody(portalId: _portal.id, folder: folder, id: id, data: result);
 
         // Light pacing to stay below Stanford's rate-limit threshold.
         // Each message fetch is ~200ms; total batch with 752 messages
@@ -2155,6 +2159,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
 
       final finishedAt = DateTime.now();
       final path = await LocalWriter.writeMessageBatchConsolidated(
+        portalId: _portal.id,
         captured: captured,
         errors: errors,
         startedAt: _batchStartedAt!,

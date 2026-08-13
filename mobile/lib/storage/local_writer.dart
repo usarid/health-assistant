@@ -4,7 +4,12 @@ import 'package:path_provider/path_provider.dart';
 
 /// Persistence for scraped clinical notes.
 ///
-/// Two output shapes:
+/// Every write/read function takes `required String portalId` so files
+/// are namespaced per portal (`$portalId-*` filename prefixes,
+/// per-portal payload tags). Prevents one portal's ingest from
+/// overwriting another's on-disk sandbox.
+///
+/// Two output shapes for note captures:
 ///   - Per-note JSON files (resilient — a crash mid-batch leaves all
 ///     previously-captured notes intact on disk)
 ///   - A running manifest (rewritten every note for incremental safety)
@@ -21,11 +26,15 @@ import 'package:path_provider/path_provider.dart';
 /// data/Containers/Data/Application/<app>/Documents/.
 class LocalWriter {
   /// Write one captured inline note to its own file.
-  static Future<String> writeNote(String csn, String html) async {
+  static Future<String> writeNote({
+    required String portalId,
+    required String csn,
+    required String html,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final notesDir = Directory('${dir.path}/notes');
     await notesDir.create(recursive: true);
-    final file = File('${notesDir.path}/stanford-note-${_csnSlug(csn)}.json');
+    final file = File('${notesDir.path}/$portalId-note-${_csnSlug(csn)}.json');
     final body = jsonEncode({
       'csn': csn,
       'savedAt': DateTime.now().toUtc().toIso8601String(),
@@ -41,11 +50,15 @@ class LocalWriter {
   /// its row label + HTML). One file per CSN keeps the resilience model
   /// intact (a crash mid-iteration leaves the previously-captured CSNs
   /// fully written; the in-progress CSN is just absent).
-  static Future<String> writeMultiNote(String csn, List<SubNote> notes) async {
+  static Future<String> writeMultiNote({
+    required String portalId,
+    required String csn,
+    required List<SubNote> notes,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final notesDir = Directory('${dir.path}/notes');
     await notesDir.create(recursive: true);
-    final file = File('${notesDir.path}/stanford-multinote-${_csnSlug(csn)}.json');
+    final file = File('${notesDir.path}/$portalId-multinote-${_csnSlug(csn)}.json');
     final body = jsonEncode({
       'csn': csn,
       'savedAt': DateTime.now().toUtc().toIso8601String(),
@@ -59,9 +72,12 @@ class LocalWriter {
   /// Rewrite the batch-progress manifest. Small file; rewriting it after
   /// each note is cheap. A crash mid-batch leaves a manifest pointing at
   /// the last completed index so we can resume or report.
-  static Future<String> writeBatchManifest(BatchManifest m) async {
+  static Future<String> writeBatchManifest({
+    required String portalId,
+    required BatchManifest m,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/stanford-batch-manifest.json');
+    final file = File('${dir.path}/$portalId-batch-manifest.json');
     await file.writeAsString(jsonEncode(m.toJson()));
     return file.path;
   }
@@ -70,6 +86,7 @@ class LocalWriter {
   /// at the end of a run. This is what iteration 3 will POST to the
   /// BinaHealth backend.
   static Future<String> writeConsolidated({
+    required String portalId,
     required List<CapturedNote> captured,
     required List<ScrapeError> errors,
     required DateTime startedAt,
@@ -77,9 +94,9 @@ class LocalWriter {
   }) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-batch-$ts.json');
+    final file = File('${dir.path}/$portalId-batch-$ts.json');
     final payload = {
-      'portal': 'stanford',
+      'portal': portalId,
       'startedAt': startedAt.toUtc().toIso8601String(),
       'finishedAt': finishedAt.toUtc().toIso8601String(),
       'capturedCount': captured.length,
@@ -99,6 +116,7 @@ class LocalWriter {
   /// This is the input for Phase 3-2 (per-message body fetch): we walk
   /// these IDs and capture the body from each detail page.
   static Future<String> writeMessagesDiscovery({
+    required String portalId,
     required DateTime startedAt,
     required DateTime finishedAt,
     required List<Map<String, dynamic>> rows,
@@ -106,9 +124,9 @@ class LocalWriter {
   }) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-messages-discovery-$ts.json');
+    final file = File('${dir.path}/$portalId-messages-discovery-$ts.json');
     final payload = {
-      'portal': 'stanford',
+      'portal': portalId,
       'startedAt': startedAt.toUtc().toIso8601String(),
       'finishedAt': finishedAt.toUtc().toIso8601String(),
       'rowCount': rows.length,
@@ -120,14 +138,16 @@ class LocalWriter {
   }
 
   /// Pull the first usable {folder, id} pair from the most recent
-  /// stanford-messages-discovery-*.json file. Used by the Phase 3-2
+  /// per-portal messages-discovery file. Used by the Phase 3-2
   /// test-fetch probe to pick a real message ID without hardcoding one.
-  static Future<Map<String, String>?> firstMessageRowFromLatestDiscovery() async {
+  static Future<Map<String, String>?> firstMessageRowFromLatestDiscovery({
+    required String portalId,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final entries = await Directory(dir.path).list().toList();
     final files = entries
         .whereType<File>()
-        .where((f) => f.path.contains('stanford-messages-discovery-'))
+        .where((f) => f.path.contains('$portalId-messages-discovery-'))
         .toList()
       ..sort((a, b) => b.path.compareTo(a.path));
     if (files.isEmpty) return null;
@@ -148,22 +168,28 @@ class LocalWriter {
 
   /// Save one test-fetch result for inspection. Per-file, timestamped,
   /// so multiple probes don't clobber each other.
-  static Future<String> writeMessageTestFetch(Map<String, dynamic> result) async {
+  static Future<String> writeMessageTestFetch({
+    required String portalId,
+    required Map<String, dynamic> result,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-message-test-fetch-$ts.json');
+    final file = File('${dir.path}/$portalId-message-test-fetch-$ts.json');
     await file.writeAsString(jsonEncode(result));
     return file.path;
   }
 
-  /// Read ALL {folder, id} pairs from the most recent discovery file.
-  /// Used by the Phase 3-2 batch loop to know which messages to fetch.
-  static Future<List<Map<String, String>>> allMessageRowsFromLatestDiscovery() async {
+  /// Read ALL {folder, id} pairs from the most recent per-portal
+  /// discovery file. Used by the Phase 3-2 batch loop to know which
+  /// messages to fetch.
+  static Future<List<Map<String, String>>> allMessageRowsFromLatestDiscovery({
+    required String portalId,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final entries = await Directory(dir.path).list().toList();
     final files = entries
         .whereType<File>()
-        .where((f) => f.path.contains('stanford-messages-discovery-'))
+        .where((f) => f.path.contains('$portalId-messages-discovery-'))
         .toList()
       ..sort((a, b) => b.path.compareTo(a.path));
     if (files.isEmpty) return const [];
@@ -185,10 +211,13 @@ class LocalWriter {
   }
 
   /// Save one lab test-fetch result for inspection — Phase 4-2 probe.
-  static Future<String> writeLabTestFetch(Map<String, dynamic> result) async {
+  static Future<String> writeLabTestFetch({
+    required String portalId,
+    required Map<String, dynamic> result,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-lab-test-fetch-$ts.json');
+    final file = File('${dir.path}/$portalId-lab-test-fetch-$ts.json');
     await file.writeAsString(jsonEncode(result));
     return file.path;
   }
@@ -198,33 +227,44 @@ class LocalWriter {
   /// Phase 4-3 Python ingest reads the JSON directly (resultComponents
   /// for structured numerical labs, studyResult.contentAsHtml for
   /// imaging/pathology bodies).
-  static Future<String> writeLabBody(String eorderid, Object details) async {
+  static Future<String> writeLabBody({
+    required String portalId,
+    required String eorderid,
+    required Object details,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final labDir = Directory('${dir.path}/labs');
     await labDir.create(recursive: true);
-    final file = File('${labDir.path}/stanford-lab-${_csnSlug(eorderid)}.json');
+    final file = File('${labDir.path}/$portalId-lab-${_csnSlug(eorderid)}.json');
     await file.writeAsString(jsonEncode({'eorderid': eorderid, 'details': details}));
     return file.path;
   }
 
   /// True if we already have a saved body for this eorderid.
   /// The auto-scrape orchestrator uses this to skip re-fetching bodies
-  /// that are already on disk — labs are effectively immutable at
-  /// Stanford, so once captured they don't need to be re-POSTed on every
+  /// that are already on disk — labs are effectively immutable at Epic
+  /// portals, so once captured they don't need to be re-POSTed on every
   /// sign-in. Manual "Refetch all" can be used if content changed
   /// (addenda / corrections).
-  static Future<bool> hasLabBody(String eorderid) async {
+  static Future<bool> hasLabBody({
+    required String portalId,
+    required String eorderid,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/labs/stanford-lab-${_csnSlug(eorderid)}.json');
+    final file = File('${dir.path}/labs/$portalId-lab-${_csnSlug(eorderid)}.json');
     return file.exists();
   }
 
   /// True if we already have a saved body for this (folder, msgId).
   /// Same idempotency rationale as [hasLabBody] — message bodies are
-  /// immutable at Stanford once sent.
-  static Future<bool> hasMessageBody(String folder, String msgId) async {
+  /// immutable at Epic portals once sent.
+  static Future<bool> hasMessageBody({
+    required String portalId,
+    required String folder,
+    required String msgId,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/messages/stanford-msg-$folder-${_csnSlug(msgId)}.json');
+    final file = File('${dir.path}/messages/$portalId-msg-$folder-${_csnSlug(msgId)}.json');
     return file.exists();
   }
 
@@ -233,6 +273,7 @@ class LocalWriter {
   /// error reasons. Phase 4-3 Python ingest reads this to find which
   /// HTML files to parse.
   static Future<String> writeLabBatchConsolidated({
+    required String portalId,
     required List<Map<String, dynamic>> captured,
     required List<Map<String, dynamic>> errors,
     required DateTime startedAt,
@@ -240,9 +281,9 @@ class LocalWriter {
   }) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-lab-batch-$ts.json');
+    final file = File('${dir.path}/$portalId-lab-batch-$ts.json');
     final payload = {
-      'portal': 'stanford',
+      'portal': portalId,
       'kind': 'lab-bodies',
       'startedAt': startedAt.toUtc().toIso8601String(),
       'finishedAt': finishedAt.toUtc().toIso8601String(),
@@ -257,15 +298,16 @@ class LocalWriter {
 
   /// Per-message body file — one JSON per message ID for crash safety
   /// during long batch runs.
-  static Future<String> writeMessageBody(
-    String folder,
-    String id,
-    Map<String, dynamic> data,
-  ) async {
+  static Future<String> writeMessageBody({
+    required String portalId,
+    required String folder,
+    required String id,
+    required Map<String, dynamic> data,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final msgDir = Directory('${dir.path}/messages');
     await msgDir.create(recursive: true);
-    final file = File('${msgDir.path}/stanford-msg-$folder-${_csnSlug(id)}.json');
+    final file = File('${msgDir.path}/$portalId-msg-$folder-${_csnSlug(id)}.json');
     final body = jsonEncode({
       'folder': folder,
       'id': id,
@@ -278,9 +320,12 @@ class LocalWriter {
 
   /// Per-batch progress manifest — small file rewritten as each message
   /// completes so a crash mid-batch leaves a recovery anchor.
-  static Future<String> writeMessageBatchManifest(MessageBatchManifest m) async {
+  static Future<String> writeMessageBatchManifest({
+    required String portalId,
+    required MessageBatchManifest m,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
-    final file = File('${dir.path}/stanford-message-batch-manifest.json');
+    final file = File('${dir.path}/$portalId-message-batch-manifest.json');
     await file.writeAsString(jsonEncode(m.toJson()));
     return file.path;
   }
@@ -289,6 +334,7 @@ class LocalWriter {
   /// the input the FHIR Communications translator (Phase 3-2 next
   /// commit) consumes.
   static Future<String> writeMessageBatchConsolidated({
+    required String portalId,
     required List<Map<String, dynamic>> captured,
     required List<Map<String, dynamic>> errors,
     required DateTime startedAt,
@@ -296,9 +342,9 @@ class LocalWriter {
   }) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = finishedAt.toUtc().toIso8601String().replaceAll(':', '-');
-    final file = File('${dir.path}/stanford-message-batch-$ts.json');
+    final file = File('${dir.path}/$portalId-message-batch-$ts.json');
     final payload = {
-      'portal': 'stanford',
+      'portal': portalId,
       'startedAt': startedAt.toUtc().toIso8601String(),
       'finishedAt': finishedAt.toUtc().toIso8601String(),
       'capturedCount': captured.length,
@@ -310,18 +356,21 @@ class LocalWriter {
     return file.path;
   }
 
-  /// Append one diag event to the current batch's diag JSONL file. Each
   /// Clinical list response — one JSON file per section per fetch.
-  /// File: Documents/clinical/stanford-<section>-<ts>.json
+  /// File: Documents/clinical/$portalId-<section>-<ts>.json
   /// Reading: the Phase 5 Python converter walks this dir, loads the
   /// most recent file per section, and emits FHIR resources.
-  static Future<String> writeClinicalList(String section, Object listJson) async {
+  static Future<String> writeClinicalList({
+    required String portalId,
+    required String section,
+    required Object listJson,
+  }) async {
     final dir = await getApplicationDocumentsDirectory();
     final clinDir = Directory('${dir.path}/clinical');
     await clinDir.create(recursive: true);
     final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
     final safeSection = section.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
-    final file = File('${clinDir.path}/stanford-$safeSection-$ts.json');
+    final file = File('${clinDir.path}/$portalId-$safeSection-$ts.json');
     await file.writeAsString(jsonEncode({
       'section': section,
       'fetchedAt': DateTime.now().toUtc().toIso8601String(),
@@ -336,6 +385,9 @@ class LocalWriter {
   /// XHR capture records the api-capture hook collected while that section
   /// was loaded. The host-side spec synthesizer reads this and emits
   /// per-resource scraper code.
+  ///
+  /// Portal id is read out of spec['portal'] which the caller already
+  /// stamps with _portal.id.
   static Future<String> writeScoutSpec(Map<String, dynamic> spec) async {
     final dir = await getApplicationDocumentsDirectory();
     final ts = DateTime.now().toUtc().toIso8601String().replaceAll(':', '-');
@@ -349,8 +401,12 @@ class LocalWriter {
   /// per-diag-batch chain so concurrent appends from the bridge are
   /// serialized. Pass the same batchStartedAt across the whole scout so
   /// the file name is stable.
-  static Future<void> appendScoutDiagLine(DateTime batchStartedAt, Map<String, dynamic> event) =>
-      appendDiagLine(batchStartedAt, event);
+  static Future<void> appendScoutDiagLine({
+    required String portalId,
+    required DateTime batchStartedAt,
+    required Map<String, dynamic> event,
+  }) =>
+      appendDiagLine(portalId: portalId, batchStartedAt: batchStartedAt, event: event);
 
   /// One JSON line per discovered scout event. Each
   /// line is a self-contained JSON object — easy to grep/parse later.
@@ -362,14 +418,18 @@ class LocalWriter {
   /// callers from the JS handler bridge can race otherwise (proven by a
   /// 33% line-corruption rate when this used naked writeAsString+
   /// FileMode.append).
-  static Future<void> appendDiagLine(DateTime batchStartedAt, Map<String, dynamic> event) {
+  static Future<void> appendDiagLine({
+    required String portalId,
+    required DateTime batchStartedAt,
+    required Map<String, dynamic> event,
+  }) {
     final stamped = Map<String, dynamic>.from(event);
     stamped['at'] = DateTime.now().toUtc().toIso8601String();
     final line = '${jsonEncode(stamped)}\n';
     _diagWriteChain = _diagWriteChain.then((_) async {
       final dir = await getApplicationDocumentsDirectory();
       final ts = batchStartedAt.toUtc().toIso8601String().replaceAll(':', '-');
-      final file = File('${dir.path}/stanford-diag-$ts.jsonl');
+      final file = File('${dir.path}/$portalId-diag-$ts.jsonl');
       await file.writeAsString(line, mode: FileMode.append, flush: true);
     });
     return _diagWriteChain;
@@ -378,11 +438,8 @@ class LocalWriter {
   static Future<void> _diagWriteChain = Future.value();
 
   /// Aggregate "incomplete" CSNs across ALL consolidated batch files in the
-  /// docs directory — the union of:
-  ///   - CSNs that errored in any batch and have never since been captured
-  ///   - CSNs captured as multi-note with at least one sub-note still empty
-  ///     (the old 1500-char threshold rejected short notes; the new code
-  ///     captures them, so these CSNs are worth re-running)
+  /// docs directory for a given portal. Same rank ordering as before:
+  ///   'errored' < 'empty' < 'partial' < 'complete' (higher wins).
   ///
   /// Excludes:
   ///   - CSNs cleanly captured (single-note with html, or multi-note with
@@ -391,21 +448,17 @@ class LocalWriter {
   ///     purpose; not "failed", so not retried
   ///
   /// Used by the "Retry failed visits" menu action.
-  static Future<List<String>> findIncompleteCsns() async {
+  static Future<List<String>> findIncompleteCsns({required String portalId}) async {
     final dir = await getApplicationDocumentsDirectory();
     final entries = await Directory(dir.path).list().toList();
     final batches = entries
         .whereType<File>()
         .where((f) =>
-            f.path.contains('stanford-batch-2') &&
+            f.path.contains('$portalId-batch-2') &&
             !f.path.contains('manifest'))
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path)); // oldest → newest
 
-    // Track the BEST state we've seen for each CSN across all batches:
-    // 'errored' < 'empty' < 'partial' < 'complete' (higher wins).
-    // 'empty' = Stanford's portal explicitly said "No Notes Available" —
-    // a definitive answer that beats 'errored' (which might be transient).
     final state = <String, String>{};
     int rank(String s) => switch (s) {
       'complete' => 4,
@@ -471,13 +524,11 @@ class LocalWriter {
             final csn = e['csn'];
             final reason = e['reason'];
             if (csn is! String) continue;
-            // Stanford-confirmed empty signals — don't keep retrying:
+            // Portal-confirmed empty signals — don't keep retrying:
             //   'no-notes-available' = portal explicitly said "No Notes
             //     Available" (the canonical empty-state panel)
             //   'no-notes-tab'       = the visit's after-visit-summary
-            //     page doesn't render a Clinical Notes tab at all (some
-            //     visit types — e.g. missed appointments, certain checkin
-            //     flows — never have notes by design)
+            //     page doesn't render a Clinical Notes tab at all
             if (reason == 'no-notes-available' || reason == 'no-notes-tab') {
               upgrade(csn, 'empty');
             } else {
