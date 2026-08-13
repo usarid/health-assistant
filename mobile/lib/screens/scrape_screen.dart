@@ -129,7 +129,19 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         actions: [
           PopupMenuButton<String>(
             onSelected: _onMenuSelected,
+            // Cap the menu height so it scrolls (via PopupMenu's internal
+            // SingleChildScrollView) instead of being clipped when the item
+            // list is taller than the space below the app bar.
+            constraints: const BoxConstraints(
+              minWidth: 260, maxWidth: 360, maxHeight: 520,
+            ),
             itemBuilder: (_) => [
+              // Everyday recovery affordances — top of the menu so they're
+              // always reachable without scrolling.
+              PopupMenuItem(value: 'go-to-login', child: Text('Go to ${_portal.name} login')),
+              const PopupMenuItem(value: 'paste-into-focused', child: Text('Paste into focused field')),
+              const PopupMenuDivider(),
+
               const PopupMenuItem(value: 'forget-login', child: Text('Forget saved login')),
               PopupMenuItem(
                 value: 'toggle-diagnostics',
@@ -162,9 +174,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                     : 'Enable auto-scout on sign-in'),
               ),
               const PopupMenuItem(value: 'run-portal-scout', child: Text('Run portal scout now')),
-              const PopupMenuDivider(),
-              PopupMenuItem(value: 'go-to-login', child: Text('Go to ${_portal.name} login')),
-              const PopupMenuItem(value: 'paste-into-focused', child: Text('Paste into focused field')),
             ],
           ),
         ],
@@ -229,11 +238,6 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               // false the cross-origin iframe content (mychart.shc Epic
               // page) is invisible to the scout — exactly what tripped v1.1.
               initialUserScripts: UnmodifiableListView<UserScript>([
-                UserScript(
-                  source: ScrapeJobs.pasteUnblocker(),
-                  injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
-                  forMainFrameOnly: false,
-                ),
                 UserScript(
                   source: ScrapeJobs.bootstrapForUserScript(),
                   injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
