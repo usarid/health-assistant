@@ -21,8 +21,8 @@
   "urls": {
     "login": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Authentication/Login?postloginurl=Home",
     "signedInHome": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Home/Index",
-    "_signedInMarker_comment": "UCSF lands users on /UCSFMyChart/Home after MFA (verified 2026-08-13 via live login). Broader alternatives like /UCSFMyChart/ would also match the login page (Authentication/Login).",
-    "signedInMarker": "/UCSFMyChart/Home",
+    "_signedInMarker_comment": "Broadened to /UCSFMyChart/ after scout: post-auth navigates through many /UCSFMyChart/<feature> URLs (Clinical/*, Messaging, Visits, etc.), and re-arming should still fire regardless of where in the SPA the user landed. The Authentication/Login path also matches — but the DOM probe (!hasPasswordInput) filters that out.",
+    "signedInMarker": "/UCSFMyChart/",
     "visitDetailPattern": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=visitdetails&csn=%CSN%",
     "messageInbox": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=messagecenter",
     "messageOutbox": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=messagecenter&folder=sent",

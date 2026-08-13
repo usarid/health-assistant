@@ -365,6 +365,22 @@ def main():
     else:
         print(f'  (no {PORTAL.id}-healthissues-*.json found)')
 
+    # Dedupe by FHIR id. UCSF returns immunizations across multiple orgs
+    # in a single response and some rows share (native_id, admin_date),
+    # which collides in det_id(). Bundle-scope requires unique ids or
+    # HAPI-0534s the whole batch. Keeping the first occurrence is fine —
+    # duplicates within a single scrape are the same source event.
+    seen = set()
+    deduped = []
+    for e in bundle_entries:
+        rid = (e.get('resource') or {}).get('id')
+        if rid in seen:
+            stats['deduped-in-bundle'] += 1
+            continue
+        seen.add(rid)
+        deduped.append(e)
+    bundle_entries = deduped
+
     print(f'\n=== Plan ===')
     for k, v in sorted(stats.items()):
         print(f'  {k:25s} {v}')

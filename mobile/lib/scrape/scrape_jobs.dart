@@ -1758,6 +1758,110 @@ class ScrapeJobs {
   ///
   /// Result via callHandler('clinicalList', payload):
   ///   { section, ok, status, list, attempts, timings }
+  /// Endpoint probe — fetches a batch of GET/POST-able Epic MyChart URLs
+  /// from a portal and emits the raw responses (first 20 KB per response)
+  /// via callHandler('probeCapture', payload). No parsing, no per-item
+  /// iteration; the goal is to see actual response SHAPES so we can
+  /// write proper fetchers per data type without rebuild-guess cycles.
+  ///
+  /// Reuses the CSRF-token-from-shell pattern from epicClinicalLoadList.
+  /// The [probes] list maps human-readable names to `{method, path,
+  /// body?}` — `path` is relative to portal.basePath (e.g. "/api/test-
+  /// results/GetList"), body is JSON string or empty.
+  static String epicProbeEndpoints({
+    required PortalConfig portal,
+    required List<Map<String, String>> probes,
+  }) {
+    final apiHostJs      = _jsString(portal.hosts.api);
+    final basePathJs     = _jsString(portal.basePath);
+    final csrfInputJs    = _jsString(portal.auth.csrfInputName);
+    final csrfHeaderJs   = _jsString(portal.auth.csrfHeaderName);
+    final tokenCacheKey  = _jsString('__binaRVT_${portal.id}');
+    final probesJs       = probes.map((p) => {
+      'name': p['name'] ?? '?',
+      'method': (p['method'] ?? 'POST').toUpperCase(),
+      'path': p['path'] ?? '',
+      'body': p['body'] ?? '',
+    }).toList();
+    // Serialize the list as a JSON literal we drop into JS.
+    final probesLit = probesJs
+        .map((p) => '{name:${_jsString(p['name'] as String)},method:${_jsString(p['method'] as String)},path:${_jsString(p['path'] as String)},body:${_jsString(p['body'] as String)}}')
+        .join(',\n      ');
+    return '''
+(async () => {
+  const API_HOST     = $apiHostJs;
+  const BASE_PATH    = $basePathJs;
+  const CSRF_INPUT   = $csrfInputJs;
+  const CSRF_HEADER  = $csrfHeaderJs;
+  const TOKEN_CACHE  = $tokenCacheKey;
+  const PROBES = [
+      $probesLit
+  ];
+  const t0 = Date.now();
+
+  function emit(payload) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+      window.flutter_inappwebview.callHandler('probeCapture', payload);
+    }
+  }
+
+  // Get CSRF token. Try cached first, else fetch from Clinical/Allergies/Index
+  // (canonical shell page on Epic MyChart).
+  let token = window[TOKEN_CACHE];
+  if (!token) {
+    const shellUrl = 'https://' + API_HOST + BASE_PATH + '/Clinical/Allergies/Index?lang=en-US';
+    try {
+      const shellResp = await fetch(shellUrl, { credentials: 'include', headers: { 'Accept': 'text/html' } });
+      const shellHtml = await shellResp.text();
+      const tokenRegex = new RegExp('name="' + CSRF_INPUT + '"[^>]*value="([^"]+)"');
+      const m = shellHtml.match(tokenRegex);
+      if (m) { token = m[1]; window[TOKEN_CACHE] = token; }
+    } catch (e) {}
+  }
+
+  const results = {};
+  for (const p of PROBES) {
+    const url = 'https://' + API_HOST + BASE_PATH + p.path;
+    const started = Date.now();
+    try {
+      const headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+      };
+      if (token) headers[CSRF_HEADER] = token;
+      const init = { method: p.method, credentials: 'include', headers };
+      if (p.method !== 'GET') init.body = p.body || '';
+      const r = await fetch(url, init);
+      const text = await r.text();
+      results[p.name] = {
+        url,
+        method: p.method,
+        status: r.status,
+        ok: r.ok,
+        contentType: r.headers.get('content-type') || '',
+        length: text.length,
+        // Bumped from 20 KB to 3 MB so probe responses aren't truncated
+        // when they need to be turned into on-disk per-section files.
+        sample: text.substring(0, 3000000),
+        elapsedMs: Date.now() - started,
+      };
+    } catch (e) {
+      results[p.name] = { url, error: (e && e.message) || String(e), elapsedMs: Date.now() - started };
+    }
+  }
+
+  emit({
+    portal: '${portal.id}',
+    tokenObtained: !!token,
+    probeCount: PROBES.length,
+    results,
+    timings: { totalMs: Date.now() - t0 },
+  });
+})();
+''';
+  }
+
   static String stanfordMedicationsFetch() => r'''
 (async () => {
   const section = 'Medications';

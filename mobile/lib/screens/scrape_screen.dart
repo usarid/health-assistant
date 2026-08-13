@@ -141,6 +141,7 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
               const PopupMenuItem(value: 'paste-into-focused', child: Text('Paste into focused field')),
               if (PortalRegistry.instance.all.length > 1)
                 const PopupMenuItem(value: 'switch-portal', child: Text('Switch portal…')),
+              const PopupMenuItem(value: 'probe-endpoints', child: Text('Probe UCSF endpoints')),
               const PopupMenuDivider(),
 
               // Scraping.
@@ -274,6 +275,10 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
                 c.addJavaScriptHandler(
                   handlerName: 'clinicalList',
                   callback: _onClinicalListHandler,
+                );
+                c.addJavaScriptHandler(
+                  handlerName: 'probeCapture',
+                  callback: _onProbeCaptureHandler,
                 );
               },
               onLoadStop: (c, url) async {
@@ -417,6 +422,16 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     final m = Map<String, dynamic>.from(args.first as Map);
     if (_clinicalListCompleter != null && !_clinicalListCompleter!.isCompleted) {
       _clinicalListCompleter!.complete(m);
+    }
+    return {'ok': true};
+  }
+
+  Completer<Map<String, dynamic>>? _probeCaptureCompleter;
+  Future<dynamic> _onProbeCaptureHandler(List<dynamic> args) async {
+    if (args.isEmpty || args.first is! Map) return {'ok': false};
+    final m = Map<String, dynamic>.from(args.first as Map);
+    if (_probeCaptureCompleter != null && !_probeCaptureCompleter!.isCompleted) {
+      _probeCaptureCompleter!.complete(m);
     }
     return {'ok': true};
   }
@@ -659,24 +674,25 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   Future<void> _runFullScrapePipeline() async {
     if (_ctrl == null || !_onSignedInPage) return;
     if (_batchRunning || _orchestratorRunning) return;
-    // Per-portal safety gate. All sub-fetchers below write to on-disk
-    // paths that hardcode "stanford-" as the filename prefix (see
-    // LocalWriter), and several of them read Stanford-shaped bundled
-    // assets (stanford-lab-orders.json) or navigate to Stanford-shaped
-    // URL patterns. Running them against a portal that hasn't been
-    // proven end-to-end would silently overwrite good Stanford data
-    // on disk with wrong-portal responses (documented 2026-08-13: 164
-    // empty-shaped UCSF responses landed in labs/stanford-lab-* files
-    // during the first UCSF sign-in). Gate here until R-5 portal-scout
-    // discovers each new portal's endpoint surface + LocalWriter is
-    // refactored to portal-scope its filenames.
-    if (_portal.id != 'stanford') {
-      setState(() => _status =
-          'Auto-scrape isn\'t wired for ${_portal.name} yet — needs R-5 '
-          'portal-scout to discover its endpoint surface first. Browse '
-          'the portal manually, or switch back to Stanford from the menu.');
-      return;
-    }
+    // Build the pipeline per portal. R-5a portal-scoped LocalWriter so
+    // file collisions are no longer a concern; the gate is now about
+    // which sub-fetchers have been PROVEN against each portal's actual
+    // API surface (via R-5b portal-scout).
+    //
+    // Clinical triad works uniformly on any Epic MyChart — same
+    // `/Clinical/<Section>/LoadListData` shape, only base_path differs
+    // (already portal-parameterized in R-2). Verified for UCSF via
+    // scout 2026-08-13: /UCSFMyChart/Clinical/Allergies/LoadListData
+    // returned 200 with the expected JSON shape.
+    //
+    // The rest (labs, messages, orion, medications-embedded-JS) are
+    // Stanford-flavored: labs use a pre-populated eorderid list from a
+    // Stanford-only bundled asset; messages use /Private/Ajax/V1/Mailbox/*
+    // (UCSF's live surface is /api/conversations/*); orion is a Stanford-
+    // specific subsystem UCSF doesn't expose; medications is an embedded-
+    // JS-object literal (UCSF has a proper JSON /LoadExternal endpoint
+    // instead). Each of those needs its own portal-aware implementation
+    // — tracked in follow-up work.
     setState(() {
       _orchestratorRunning = true;
       _abortRequested = false;
@@ -684,17 +700,23 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
     });
     final portalTag = _portal.name;
     final tasks = <(String, Future<void> Function())>[
-      ('Lab bodies ($portalTag)',                     _fetchAllLabBodies),
-      // Message-body fetch reads a discovery file from disk (list of
-      // inbox+outbox message ids), so discovery HAS to run first — on a
-      // fresh install the file doesn't exist and _fetchAllMessageBodies
-      // silently no-ops. Discovery is cheap (~5s) and idempotent.
-      ('Message discovery ($portalTag)',              _discoverMessages),
-      ('Message bodies ($portalTag)',                 _fetchAllMessageBodies),
+      // Portal-agnostic (proven for stanford + ucsf).
       ('Clinical triad (Allergies / Imm / Conds)',    _fetchClinicalTriad),
-      ('Orion endpoints (Procedures / Appointments)', _fetchOrionEndpoints),
-      ('Medications ($portalTag)',                    _fetchMedications),
     ];
+    if (_portal.id == 'stanford') {
+      // Stanford-only until each is ported per portal:
+      tasks.insertAll(0, [
+        ('Lab bodies ($portalTag)',                     _fetchAllLabBodies),
+        // Message-body fetch reads a discovery file from disk; discovery
+        // HAS to run first on a fresh install.
+        ('Message discovery ($portalTag)',              _discoverMessages),
+        ('Message bodies ($portalTag)',                 _fetchAllMessageBodies),
+      ]);
+      tasks.addAll([
+        ('Orion endpoints (Procedures / Appointments)', _fetchOrionEndpoints),
+        ('Medications ($portalTag)',                    _fetchMedications),
+      ]);
+    }
     int ok = 0, failed = 0;
     try {
       for (var i = 0; i < tasks.length; i++) {
@@ -830,6 +852,99 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
   /// Fetch the AllergyIntolerance / Immunization / Condition triad — all
   /// three use the same POST /myhealth_sso/Clinical/<Section>/Load…
   /// pattern with an empty body. Token caching matches the lab fetcher
+  /// One-shot: hit a batch of Epic MyChart endpoints on the active
+  /// portal and dump raw responses to disk. Used to inspect real
+  /// response shapes before writing per-endpoint parsers. Writes
+  /// clinical/<portal>-probe-<ts>.json under Documents.
+  Future<void> _probeUcsfEndpoints() async {
+    if (_ctrl == null) return;
+    if (_batchRunning) return;
+    setState(() {
+      _batchRunning = true;
+      _status = 'Probing ${_portal.name} endpoints…';
+    });
+    try {
+      _probeCaptureCompleter = Completer<Map<String, dynamic>>();
+      final probes = <Map<String, String>>[
+        // Clinical triad — SAME response shape as Stanford (verified 2026-08-13).
+        // The `sectionFile` key steers the Dart writer to save these as proper
+        // per-section files that convert_mobile_clinical_to_fhir.py picks up.
+        {'name': 'allergiesLoadListData',     'method': 'POST', 'path': '/Clinical/Allergies/LoadListData?ComponentNumber=2', 'body': '', 'sectionFile': 'allergies'},
+        {'name': 'immunizationsLoadList',     'method': 'POST', 'path': '/Clinical/Immunizations/LoadImmunizationsList?ComponentNumber=2', 'body': '', 'sectionFile': 'immunizations'},
+        {'name': 'healthIssuesLoadListData',  'method': 'POST', 'path': '/Clinical/HealthIssues/LoadListData?ComponentNumber=2', 'body': '', 'sectionFile': 'healthissues'},
+
+        // Medications — LoadExternal returns a list of orgs each with a
+        // PrescriptionList. Close to Stanford's shape but nested differently.
+        {'name': 'medicationsLoadExternal',   'method': 'POST', 'path': '/Clinical/Medications/LoadExternal',     'body': '', 'sectionFile': 'medications'},
+
+        // Visits — LoadPast returns 357 KB of past visits.
+        {'name': 'visitsLoadPast',            'method': 'POST', 'path': '/Visits/VisitsList/LoadPast?loadpast=1&ComponentNumber=7&oldestRenderedDate=2020-01-01T00%3A00%3A00.000Z', 'body': '', 'sectionFile': 'visits-past'},
+        {'name': 'visitsLoadUpcoming',        'method': 'POST', 'path': '/Visits/VisitsList/LoadUpcoming?timeZone=America%2FLos_Angeles&ComponentNumber=5', 'body': '', 'sectionFile': 'visits-upcoming'},
+
+        // Letters + Care Team — new capabilities UCSF exposes.
+        {'name': 'lettersGetLettersList',     'method': 'POST', 'path': '/api/letters/GetLettersList',            'body': '', 'sectionFile': 'letters'},
+        {'name': 'careTeamLoad',              'method': 'POST', 'path': '/Clinical/CareTeam/Load?hfrId=&sources=&actions=&isPrimaryStandalone=true&ComponentNumber=2', 'body': '', 'sectionFile': 'careteam'},
+
+        // Labs — GetList 500s without body. Try a few common param shapes.
+        // First hit that returns 200 wins for parser design.
+        {'name': 'testResultsGetList_empty',   'method': 'POST', 'path': '/api/test-results/GetList', 'body': '{}'},
+        {'name': 'testResultsGetList_paged',   'method': 'POST', 'path': '/api/test-results/GetList', 'body': '{"startIndex":0,"count":50}'},
+        {'name': 'testResultsGetList_extern',  'method': 'POST', 'path': '/api/test-results/GetList', 'body': '{"includeExternal":true}'},
+        {'name': 'testResultsGetCommunityInfo','method':'POST', 'path': '/api/test-results/GetCommunityInfo',     'body': ''},
+
+        // Conversations (messages) — GetConversationList 500s without body.
+        // From GetFoldersList we know folders have `tag` values (1..6);
+        // typical Epic uses {folder: tag}. Try tag=1 first (usually inbox).
+        {'name': 'conversationsGetFoldersList','method':'POST', 'path': '/api/conversations/GetFoldersList',      'body': ''},
+        {'name': 'conversationsGetOrganizations','method':'POST','path':'/api/conversations/GetOrganizations',    'body': ''},
+        {'name': 'conversationsList_tag1',     'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folder":1}'},
+        {'name': 'conversationsList_folder1',  'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{"folderTag":1}'},
+        {'name': 'conversationsList_empty',    'method':'POST', 'path': '/api/conversations/GetConversationList', 'body': '{}'},
+      ];
+      await _ctrl!.evaluateJavascript(
+        source: ScrapeJobs.epicProbeEndpoints(portal: _portal, probes: probes));
+      final result = await _probeCaptureCompleter!.future.timeout(const Duration(seconds: 120));
+      // Full-blob dump (debug + follow-up analysis).
+      final rawPath = await LocalWriter.writeClinicalList(
+        portalId: _portal.id,
+        section: 'probe',
+        listJson: result,
+      );
+      // Per-section files (only for the ones that succeeded + have a
+      // sectionFile name). Steers ingest-side scripts at the right data.
+      int wroteFiles = 0;
+      final stats = result['results'] as Map? ?? {};
+      for (final probe in probes) {
+        final sectionFile = probe['sectionFile'];
+        if (sectionFile == null) continue;
+        final r = stats[probe['name']];
+        if (r is! Map || r['ok'] != true) continue;
+        final sampleStr = r['sample'] as String?;
+        if (sampleStr == null || sampleStr.isEmpty) continue;
+        try {
+          final parsed = jsonDecode(sampleStr);
+          await LocalWriter.writeClinicalList(
+            portalId: _portal.id,
+            section: sectionFile,
+            listJson: parsed,
+          );
+          wroteFiles++;
+        } catch (_) { /* JSON parse failed (truncated?); skip */ }
+      }
+      if (!mounted) return;
+      final okCount = stats.values.whereType<Map>().where((v) => v['ok'] == true).length;
+      setState(() => _status = 'Probe done: $okCount/${stats.length} ok. Wrote $wroteFiles per-section files. Raw: $rawPath');
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() => _status = 'Probe timed out (>90s)');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = 'Probe failed: $e');
+    } finally {
+      setState(() => _batchRunning = false);
+    }
+  }
+
   /// (Phase 4-2). Each section's JSON lands under
   /// Documents/clinical/stanford-<section>-<ts>.json.
   Future<void> _fetchClinicalTriad() async {
@@ -1382,6 +1497,8 @@ class _ScrapeScreenState extends State<ScrapeScreen> {
         content: Text(msg),
         duration: const Duration(seconds: 3),
       ));
+    } else if (value == 'probe-endpoints') {
+      await _probeUcsfEndpoints();
     } else if (value == 'retry-failures') {
       // Aggregates failed + partially-captured CSNs across ALL prior
       // batches — so retry catches both never-worked visits AND multi-note
