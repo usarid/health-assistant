@@ -45,5 +45,11 @@ app.*.map.json
 /android/app/release
 
 # Bundled PHI (CSN list from tools/v3/out/) — copied at build time, never committed.
-# See scripts/sync-mobile-assets.sh.
-assets/
+# See scripts/sync-mobile-assets.sh. Ignore everything directly under
+# assets/ but ALLOW re-including subdirs via unignore below (git can't
+# re-include a file inside an excluded directory, so we exclude files
+# not the whole directory).
+assets/*
+# Portal configs are public info (URLs, hostnames, auth field names);
+# tracked in git so a clean clone builds.
+!assets/portals/

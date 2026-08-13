@@ -82,6 +82,7 @@ INCLUDE_LIST="$STAGE/include.txt"
     [ -d "$REPO_ROOT/tools/v3/out" ] && echo "$REPO_ROOT/tools/v3/out"
     [ -f "$REPO_ROOT/tools/v2/patient_config/org_mapping.json" ] && echo "$REPO_ROOT/tools/v2/patient_config/org_mapping.json"
     [ -f "$REPO_ROOT/tools/v2/patient_config/patient_identity.json" ] && echo "$REPO_ROOT/tools/v2/patient_config/patient_identity.json"
+    [ -f "$REPO_ROOT/tools/portal_ingest_config.json" ] && echo "$REPO_ROOT/tools/portal_ingest_config.json"
     [ -f "$REPO_ROOT/.env" ] && echo "$REPO_ROOT/.env"
 } > "$INCLUDE_LIST"
 

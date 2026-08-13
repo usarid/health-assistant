@@ -1,0 +1,17 @@
+{
+  "_comment": "Per-portal ingest metadata. Copy to portal_ingest_config.json (gitignored) and fill with real values from your HAPI patient sub-identities. Backed up nightly via restic (scripts/backup.sh).",
+  "_note_patient_refs": "The FHIR Patient reference is created once when you first connect a portal via patient consolidation (see tools/patient_consolidation/). Query HAPI: /Patient?_tag=urn:bina:src-portal|<portal>.<vendor>",
+
+  "stanford": {
+    "patientRef": "Patient/<your-stanford-sub-identity-id>",
+    "identifierSystemPrefix": "urn:stanford:myhealth",
+    "srcPortalTag": "stanford.mychart",
+    "inputDirName": "stanford"
+  },
+  "ucsf": {
+    "patientRef": "Patient/<your-ucsf-sub-identity-id>",
+    "identifierSystemPrefix": "urn:ucsf:mychart",
+    "srcPortalTag": "ucsf.mychart",
+    "inputDirName": "ucsf"
+  }
+}

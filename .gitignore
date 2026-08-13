@@ -73,5 +73,16 @@ mobile/macos/Pods/
 # ── Backup credentials (never commit) ──
 .binahealth-backup-env
 
-# Mobile-bundled PHI asset (CSN list) — see scripts/sync-mobile-assets.sh
-mobile/assets/
+# Mobile-bundled PHI asset (CSN list) — see scripts/sync-mobile-assets.sh.
+# Ignore everything directly under mobile/assets/ but allow re-including
+# subdirs below (git can't re-include a file whose parent dir is ignored,
+# so we exclude files not the directory).
+mobile/assets/*
+# ...but portal configs are public info (URLs, hostnames, auth field
+# names), tracked in git so the mobile app can build from a clean clone.
+# Ingest-side per-portal metadata (FHIR patient refs etc.) lives in
+# tools/portal_ingest_config.json — that one stays private.
+!mobile/assets/portals/
+
+# ── Portal ingest config (private per-portal FHIR refs) ──
+tools/portal_ingest_config.json

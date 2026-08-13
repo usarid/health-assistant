@@ -1,0 +1,38 @@
+{
+  "_comment": "Stanford MyChart portal config. Read at app startup by PortalRegistry. Every field here was previously a hardcoded constant in lib/scrape/stanford_config.dart (deleted in the same commit that added this file).",
+
+  "id": "stanford",
+  "name": "Stanford MyChart",
+  "vendor": "epic",
+
+  "hosts": {
+    "_comment": "Stanford has two origins: a wrapper (myhealth.*) that hosts the SPA + per-visit pages, and an API host (mychart.*) reached via SSO. Session cookies live on the wrapper origin; cross-origin fetch()s are trusted because both are same-site (see C-021).",
+    "wrapper": "myhealth.stanfordhealthcare.org",
+    "api": "mychart.stanfordhealthcare.org"
+  },
+
+  "basePath": "/myhealth_sso",
+
+  "auth": {
+    "_comment": "HTTP headers are case-insensitive per RFC, but we match exactly what the working Dart scraper has been sending without server complaint since Phase 4 — CamelCase.",
+    "csrfInputName": "__RequestVerificationToken",
+    "csrfHeaderName": "__RequestVerificationToken"
+  },
+
+  "urls": {
+    "login": "https://myhealth.stanfordhealthcare.org/#/",
+    "signedInHome": "https://myhealth.stanfordhealthcare.org/signedin/home",
+    "signedInMarker": "/signedin/",
+    "visitDetailPattern": "https://myhealth.stanfordhealthcare.org/signedin/appointments/after-visit-summary/csn=%CSN%&encType=3",
+    "messageInbox": "https://myhealth.stanfordhealthcare.org/signedin/messages/inbox",
+    "messageOutbox": "https://myhealth.stanfordhealthcare.org/signedin/messages/outbox",
+    "messageDetailPattern": "https://myhealth.stanfordhealthcare.org/signedin/messages/detail/%FOLDER%/%MSG_ID%"
+  },
+
+  "keepaliveUrls": [
+    "https://mychart.stanfordhealthcare.org/myhealth_sso/keepalive.asp",
+    "https://myhealth.stanfordhealthcare.org/signedin/keepalive.asp"
+  ],
+
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+}

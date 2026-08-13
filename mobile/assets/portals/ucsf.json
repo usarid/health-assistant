@@ -1,0 +1,37 @@
+{
+  "_comment": "UCSF MyChart portal config. Values derived from tools/v3/configs/ucsf.json (validated 2026-06-06) and ingest/scrapers/scrape_ucsf_*.js. UCSF is single-origin (no separate wrapper host like Stanford's myhealth.* + mychart.* split). URLs marked '(best guess)' will be verified by R-5 portal-scout on first sign-in.",
+
+  "id": "ucsf",
+  "name": "UCSF MyChart",
+  "vendor": "epic",
+
+  "hosts": {
+    "_comment": "UCSF is single-origin. ucsfmychart.ucsfmedicalcenter.org is the working host (user-confirmed 2026-08-13). mychart.ucsf.edu appears in older docs but doesn't resolve.",
+    "wrapper": null,
+    "api": "ucsfmychart.ucsfmedicalcenter.org"
+  },
+
+  "basePath": "/UCSFMyChart",
+
+  "auth": {
+    "csrfInputName": "__RequestVerificationToken",
+    "csrfHeaderName": "__RequestVerificationToken"
+  },
+
+  "urls": {
+    "login": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Authentication/Login?postloginurl=Home",
+    "signedInHome": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Home/Index",
+    "_signedInMarker_comment": "'/UCSFMyChart/inside' is a common Epic post-auth path segment (best guess); R-5 will verify against the real signed-in URL.",
+    "signedInMarker": "/UCSFMyChart/inside",
+    "visitDetailPattern": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=visitdetails&csn=%CSN%",
+    "messageInbox": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=messagecenter",
+    "messageOutbox": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=messagecenter&folder=sent",
+    "messageDetailPattern": "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/inside.asp?mode=msg_view&folder=%FOLDER%&msgid=%MSG_ID%"
+  },
+
+  "keepaliveUrls": [
+    "https://ucsfmychart.ucsfmedicalcenter.org/UCSFMyChart/Authentication/Login?mode=keepalive"
+  ],
+
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+}

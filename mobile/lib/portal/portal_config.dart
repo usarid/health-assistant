@@ -3,13 +3,14 @@ import 'dart:convert';
 /// Portal configuration loaded from assets/portals/*.json at app startup.
 ///
 /// Contract: this holds VALUES only (hostnames, URLs, auth field names,
-/// keepalive endpoints, ingest-side references). Meaty scraping logic
-/// lives in code, not config — see lib/scrape/scrape_jobs.dart.
-/// Selectors that vary per portal read their variance from here.
+/// keepalive endpoints). Meaty scraping logic lives in code, not config —
+/// see lib/scrape/scrape_jobs.dart. Selectors that vary per portal read
+/// their variance from here.
 ///
-/// The same JSON is also read by tools/portal_registry.py on the ingest
-/// side, keeping mobile-scrape config and FHIR-ingest config in a single
-/// source of truth per portal.
+/// Public info only — the JSONs are checked into git. Ingest-side per-
+/// portal metadata (FHIR patient refs, identifier prefixes) lives in
+/// tools/portal_ingest_config.json, which is gitignored and read only
+/// by the Python converters. See tools/portal_registry.py.
 class PortalConfig {
   final String id;
   final String name;
@@ -22,12 +23,6 @@ class PortalConfig {
   final List<String> keepaliveUrls;
   final String userAgent;
 
-  /// Fields consumed by the Python FHIR converters, not the mobile app.
-  /// Present in every portal JSON but never accessed in Dart today —
-  /// exposed as-is on the config object in case a future mobile feature
-  /// wants them (e.g. showing "Patient/xxx" in a debug pane).
-  final PortalIngest ingest;
-
   const PortalConfig({
     required this.id,
     required this.name,
@@ -38,7 +33,6 @@ class PortalConfig {
     required this.urls,
     required this.keepaliveUrls,
     required this.userAgent,
-    required this.ingest,
   });
 
   factory PortalConfig.fromJsonString(String source) {
@@ -58,44 +52,8 @@ class PortalConfig {
       keepaliveUrls:
           (m['keepaliveUrls'] as List).map((e) => e as String).toList(),
       userAgent: m['userAgent'] as String,
-      ingest: PortalIngest.fromMap(m['ingest'] as Map<String, dynamic>),
     );
   }
-}
-
-class PortalIngest {
-  /// FHIR Patient reference the converters attach to every resource
-  /// (e.g. "Patient/eLnGIs…"). Per-portal because the vault holds one
-  /// sub-identity Patient per data source.
-  final String patientRef;
-
-  /// Prefix for FHIR Identifier.system values. Converters append the
-  /// data-type suffix (":allergy", ":message", etc.). Kept per portal
-  /// because existing data uses institution-specific systems and we
-  /// don't want to re-key on migration.
-  final String identifierSystemPrefix;
-
-  /// Value stamped on the `urn:bina:src-portal` meta tag — the
-  /// coarse-grained "which portal did this come from" marker.
-  final String srcPortalTag;
-
-  /// Short slug used in `tools/v3/out/<slug>-…` directory names on the
-  /// ingest side (e.g. `stanford-clinical`, `stanford-labs`).
-  final String inputDirName;
-
-  const PortalIngest({
-    required this.patientRef,
-    required this.identifierSystemPrefix,
-    required this.srcPortalTag,
-    required this.inputDirName,
-  });
-
-  factory PortalIngest.fromMap(Map<String, dynamic> m) => PortalIngest(
-        patientRef: m['patientRef'] as String,
-        identifierSystemPrefix: m['identifierSystemPrefix'] as String,
-        srcPortalTag: m['srcPortalTag'] as String,
-        inputDirName: m['inputDirName'] as String,
-      );
 }
 
 class PortalHosts {
