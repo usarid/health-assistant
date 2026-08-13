@@ -249,6 +249,116 @@ def build_observation(eorderid: str, dr_index_entry: dict, component: dict,
     return obs
 
 
+def build_enriched_dr_from_body(eorderid: str, r0: dict, meta: dict) -> dict:
+    """Synthesize a DiagnosticReport from the body file's own metadata.
+    Used both as the anchor for numeric labs (Observations attach here)
+    and as the standalone record for imaging/pathology labs where the
+    real content lives in a scanned document we can't extract as text.
+
+    Captures every useful field from orderMetadata:
+      - name (code.text), status, dates (effective + issued)
+      - authorizing/ordering/reading providers → performer[]
+      - resulting-lab display + CLIA number → performer[] + identifier
+      - associated diagnoses → conclusion (plain text) + reasonCode[]
+      - specimens → specimen[] (display-only ref) OR bodySite text
+      - scans → presentedForm[] as reference stubs (dcsId + fileExtension;
+        we don't have the bytes so no content, just a marker that
+        additional scanned material exists for this order)
+    """
+    from base64 import b64encode as _b64
+    synth_dr_id = f"{PORTAL.id}-labdr-{hashlib.sha1(eorderid.encode()).hexdigest()[:12]}"
+    dr = {
+        'resourceType': 'DiagnosticReport',
+        'id': synth_dr_id,
+        'identifier': [{'system': DR_IDENT_SYSTEM, 'value': eorderid}],
+        'status': STATUS_MAP.get(meta.get('resultStatus') or '', 'final'),
+        'code': {'text': (r0.get('name') or '').strip() or 'Lab result'},
+        'subject': {'reference': PORTAL.patient_ref},
+        'meta': {'tag': [
+            {'system': 'urn:bina:src-portal',      'code': SRC_PORTAL_TAG},
+            {'system': 'urn:bina:src-org',         'code': PORTAL.id},
+            {'system': 'urn:bina:scraper-version', 'code': SCRAPER_VERSION},
+        ]},
+    }
+    effective_iso = meta.get('prioritizedInstantISO') or ''
+    if effective_iso:
+        dr['effectiveDateTime'] = effective_iso
+    result_iso = meta.get('latestUpdateInstantISO') or effective_iso
+    if result_iso:
+        dr['issued'] = result_iso
+
+    # Performers: order, authorizing, reading, resultingLab.
+    performers = []
+    seen_names = set()
+    def _add_perf(name, extra=None):
+        n = (name or '').strip()
+        if not n or n in seen_names: return
+        seen_names.add(n)
+        entry = {'display': n}
+        if extra: entry.update(extra)
+        performers.append(entry)
+    _add_perf(meta.get('authorizingProviderName'))
+    _add_perf(meta.get('orderProviderName'))
+    _add_perf(meta.get('readingProviderName'))
+    rl = meta.get('resultingLab') or {}
+    if isinstance(rl, dict) and rl.get('name'):
+        extra = {}
+        clia = (rl.get('cliaNumber') or '').strip()
+        if clia:
+            extra['identifier'] = {
+                'system': 'http://terminology.hl7.org/NamingSystem/CLIA',
+                'value': clia,
+            }
+        _add_perf(rl['name'], extra)
+    if performers:
+        dr['performer'] = performers
+
+    # Associated diagnoses → conclusion (plain text) + reasonCode[].
+    diags = meta.get('associatedDiagnoses') or []
+    if isinstance(diags, list) and diags:
+        dr['conclusion'] = '; '.join(str(d) for d in diags if d)
+        dr['reasonCode'] = [{'text': str(d)} for d in diags if d]
+
+    # Specimens (display-only).
+    spec = (meta.get('specimensDisplay') or '').strip()
+    if spec:
+        dr['specimen'] = [{'display': spec}]
+
+    # Scans → presentedForm[] with a data-URI stub. We don't have the
+    # bytes; capture the identifier + extension so downstream can flag
+    # "content exists elsewhere".
+    scans = r0.get('scans') or []
+    if isinstance(scans, list) and scans:
+        forms = []
+        for s in scans:
+            if not isinstance(s, dict): continue
+            dcs = (s.get('dcsId') or '').strip()
+            ext = (s.get('fileExtension') or 'BIN').strip().lower()
+            if not dcs: continue
+            forms.append({
+                'contentType': f'application/octet-stream',
+                'title': f'Scanned document ({ext.upper()}) — dcsId {dcs[:24]}…',
+                # No `data` field: we haven't downloaded the scan.
+                'extension': [{
+                    'url': 'urn:bina:epic-scan-ref',
+                    'valueString': f'{dcs}|{ext}',
+                }],
+            })
+        if forms:
+            dr['presentedForm'] = forms
+
+    # category: LAB (already the resultType for these).
+    result_type = (meta.get('resultType') or 'LAB').upper()
+    dr['category'] = [{
+        'coding': [{
+            'system': 'http://terminology.hl7.org/CodeSystem/v2-0074',
+            'code': result_type,
+        }],
+    }]
+
+    return dr
+
+
 def merge_dr(existing_dr: dict, result_refs: list, effective_iso: str,
              stanford_status: str) -> dict:
     """Take HAPI's existing DR and PUT-update it with our new result refs,
@@ -396,82 +506,66 @@ def main():
             stats['no-results'] += 1; continue
         r0 = results[0]
         components = r0.get('resultComponents') or []
-        if not components:
-            stats['empty-components'] += 1; continue
         meta = r0.get('orderMetadata') or {}
         effective_iso = meta.get('prioritizedInstantISO') or ''
         stanford_status = meta.get('resultStatus') or ''
 
-        # DR anchor: use existing HAPI DR if we can find one for this
-        # eorderid (Stanford's normal path — v3 ingest wrote DR shells
-        # in advance). Otherwise SYNTHESIZE a fresh DR from the body's
-        # own metadata (UCSF path — no pre-existing DRs because their
-        # per-session order keys rotate, so a labs-list step done in a
-        # different session would produce mismatched anchors).
+        # Build the enriched-from-body DR ONCE. Used both as the anchor
+        # for Observations (numeric labs) and as the standalone metadata
+        # record (imaging/pathology labs — no numeric components but
+        # real name/provider/diagnoses/resultingLab/scans in
+        # orderMetadata + scans).
+        enriched = build_enriched_dr_from_body(eorderid, r0, meta)
+
+        # DR anchor: prefer HAPI's existing DR if we have one (preserves
+        # any other-ingest fields we don't manage). Otherwise use the
+        # enriched-from-body version as the base.
         if eorderid in dr_index:
             dr_entry = dr_index[eorderid]
-        else:
-            synth_dr_id = f"{PORTAL.id}-labdr-{hashlib.sha1(eorderid.encode()).hexdigest()[:12]}"
-            synth_dr = {
-                'resourceType': 'DiagnosticReport',
-                'id': synth_dr_id,
-                'identifier': [{'system': DR_IDENT_SYSTEM, 'value': eorderid}],
-                'status': 'final',
-                'code': {'text': (r0.get('name') or '').strip() or 'Lab result'},
-                'subject': {'reference': f'Patient/{PORTAL.patient_ref.split("/")[-1]}'},
-                'meta': {'tag': [
-                    {'system': 'urn:bina:src-portal',      'code': SRC_PORTAL_TAG},
-                    {'system': 'urn:bina:src-org',         'code': PORTAL.id},
-                    {'system': 'urn:bina:scraper-version', 'code': SCRAPER_VERSION},
-                ]},
-            }
-            if effective_iso:
-                synth_dr['effectiveDateTime'] = effective_iso
-                synth_dr['issued'] = effective_iso
-            prov = (meta.get('authorizingProviderName') or meta.get('orderProviderName') or '').strip()
-            if prov:
-                synth_dr['performer'] = [{'display': prov}]
-            # POST it now so subsequent lookups on the fly see it.
             try:
-                # PUT is idempotent by id; upsert.
-                req = urllib.request.Request(
-                    f'{HAPI_BASE}/DiagnosticReport/{synth_dr_id}',
-                    data=json.dumps(synth_dr).encode('utf-8'),
-                    headers={'Content-Type': 'application/fhir+json'},
-                    method='PUT',
-                )
-                urllib.request.urlopen(req).read()
-                stats['dr-synthesized'] += 1
-            except urllib.error.HTTPError as e:
-                stats['dr-synth-failed'] += 1
-                failures.append({'eorderid': eorderid[:30] + '…',
-                                 'reason': f'dr-synth:{e.code}'})
+                existing_dr = hapi_get(f"/DiagnosticReport/{dr_entry['fhirId']}")
+            except Exception as e:
+                stats['dr-fetch-failed'] += 1
+                failures.append({'eorderid': eorderid[:30] + '…', 'reason': f'dr-fetch:{e}'})
                 continue
-            dr_index[eorderid] = {'fhirId': synth_dr_id,
-                                  'subjectRef': synth_dr['subject']['reference']}
+            # Layer enriched fields on top (existing wins for anything
+            # already set, we only fill in blanks).
+            for k, v in enriched.items():
+                if k in ('resourceType', 'id', 'subject'): continue
+                if k == 'meta':
+                    # Merge tags
+                    ex_tags = ((existing_dr.get('meta') or {}).get('tag') or [])
+                    ex_systems = {t.get('system') for t in ex_tags}
+                    for t in (v.get('tag') or []):
+                        if t.get('system') not in ex_systems:
+                            ex_tags.append(t)
+                    existing_dr.setdefault('meta', {})['tag'] = ex_tags
+                    continue
+                if not existing_dr.get(k):
+                    existing_dr[k] = v
+            base_dr = existing_dr
+        else:
+            base_dr = enriched
+            dr_index[eorderid] = {
+                'fhirId': base_dr['id'],
+                'subjectRef': base_dr['subject']['reference'],
+            }
             dr_entry = dr_index[eorderid]
 
-        # Build Observations
+        # Build Observations if components present.
         obs_list = []
         for row_index, comp in enumerate(components):
             obs = build_observation(eorderid, dr_entry, comp, effective_iso, row_index)
             if obs:
                 obs_list.append(obs)
         stats['labs-processed'] += 1
-        obs_per_lab.append(len(obs_list))
-        if not obs_list:
-            stats['all-components-empty'] += 1
-            continue
+        if components:
+            obs_per_lab.append(len(obs_list))
+        else:
+            stats['empty-components'] += 1
 
-        # Fetch existing DR for merge
-        try:
-            existing_dr = hapi_get(f"/DiagnosticReport/{dr_entry['fhirId']}")
-        except Exception as e:
-            stats['dr-fetch-failed'] += 1
-            failures.append({'eorderid': eorderid[:30] + '…', 'reason': f'dr-fetch:{e}'})
-            continue
         result_refs = [{'reference': f"Observation/{o['id']}"} for o in obs_list]
-        dr_updated = merge_dr(existing_dr, result_refs, effective_iso, stanford_status)
+        dr_updated = merge_dr(base_dr, result_refs, effective_iso, stanford_status)
 
         bundle = build_transaction_bundle(dr_updated, obs_list)
 
