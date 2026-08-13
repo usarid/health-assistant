@@ -1821,8 +1821,10 @@ class ScrapeJobs {
       'X-Requested-With': 'XMLHttpRequest',
     };
     headers[CSRF_HEADER] = token;
+    // Empty JSON object, NOT empty string. UCSF's /api/test-results/GetList
+    // returns 500 on '' but 200 on '{}'. Confirmed 2026-08-13 via probe.
     resp = await fetch(url, {
-      method: 'POST', credentials: 'include', headers, body: '',
+      method: 'POST', credentials: 'include', headers, body: '{}',
     });
   } catch (e) {
     return fail('list-fetch-failed', { message: (e && e.message) || String(e) });

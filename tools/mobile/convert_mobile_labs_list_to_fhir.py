@@ -182,7 +182,10 @@ def main():
     CLINICAL_DIR = PORTAL.input_dir(V3_OUT, 'clinical')
     PATIENT_REF = PORTAL.patient_ref
     SRC_PORTAL_TAG = PORTAL.src_portal_tag
-    IDENT_DR = PORTAL.identifier_system('test-result-order')
+    # 'order' matches the convention convert_mobile_labs_to_fhir.py uses
+    # to look up parent DRs when POSTing per-component Observations —
+    # keep the systems aligned so the details converter can find these.
+    IDENT_DR = PORTAL.identifier_system('order')
     ID_PREFIX_LABDR = f'{PORTAL.id}-labdr'
     print(f'Portal: {PORTAL.name} ({PORTAL.id})')
 

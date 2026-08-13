@@ -394,11 +394,6 @@ def main():
             stats['no-eorderid'] += 1; continue
         if not results:
             stats['no-results'] += 1; continue
-        if eorderid not in dr_index:
-            stats['dr-not-in-hapi'] += 1
-            failures.append({'eorderid': eorderid[:30] + '…', 'reason': 'no-hapi-dr'})
-            continue
-
         r0 = results[0]
         components = r0.get('resultComponents') or []
         if not components:
@@ -406,7 +401,55 @@ def main():
         meta = r0.get('orderMetadata') or {}
         effective_iso = meta.get('prioritizedInstantISO') or ''
         stanford_status = meta.get('resultStatus') or ''
-        dr_entry = dr_index[eorderid]
+
+        # DR anchor: use existing HAPI DR if we can find one for this
+        # eorderid (Stanford's normal path — v3 ingest wrote DR shells
+        # in advance). Otherwise SYNTHESIZE a fresh DR from the body's
+        # own metadata (UCSF path — no pre-existing DRs because their
+        # per-session order keys rotate, so a labs-list step done in a
+        # different session would produce mismatched anchors).
+        if eorderid in dr_index:
+            dr_entry = dr_index[eorderid]
+        else:
+            synth_dr_id = f"{PORTAL.id}-labdr-{hashlib.sha1(eorderid.encode()).hexdigest()[:12]}"
+            synth_dr = {
+                'resourceType': 'DiagnosticReport',
+                'id': synth_dr_id,
+                'identifier': [{'system': DR_IDENT_SYSTEM, 'value': eorderid}],
+                'status': 'final',
+                'code': {'text': (r0.get('name') or '').strip() or 'Lab result'},
+                'subject': {'reference': f'Patient/{PORTAL.patient_ref.split("/")[-1]}'},
+                'meta': {'tag': [
+                    {'system': 'urn:bina:src-portal',      'code': SRC_PORTAL_TAG},
+                    {'system': 'urn:bina:src-org',         'code': PORTAL.id},
+                    {'system': 'urn:bina:scraper-version', 'code': SCRAPER_VERSION},
+                ]},
+            }
+            if effective_iso:
+                synth_dr['effectiveDateTime'] = effective_iso
+                synth_dr['issued'] = effective_iso
+            prov = (meta.get('authorizingProviderName') or meta.get('orderProviderName') or '').strip()
+            if prov:
+                synth_dr['performer'] = [{'display': prov}]
+            # POST it now so subsequent lookups on the fly see it.
+            try:
+                # PUT is idempotent by id; upsert.
+                req = urllib.request.Request(
+                    f'{HAPI_BASE}/DiagnosticReport/{synth_dr_id}',
+                    data=json.dumps(synth_dr).encode('utf-8'),
+                    headers={'Content-Type': 'application/fhir+json'},
+                    method='PUT',
+                )
+                urllib.request.urlopen(req).read()
+                stats['dr-synthesized'] += 1
+            except urllib.error.HTTPError as e:
+                stats['dr-synth-failed'] += 1
+                failures.append({'eorderid': eorderid[:30] + '…',
+                                 'reason': f'dr-synth:{e.code}'})
+                continue
+            dr_index[eorderid] = {'fhirId': synth_dr_id,
+                                  'subjectRef': synth_dr['subject']['reference']}
+            dr_entry = dr_index[eorderid]
 
         # Build Observations
         obs_list = []
